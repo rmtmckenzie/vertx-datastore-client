@@ -20,39 +20,28 @@ import com.google.api.client.auth.oauth2.Credential;
 import com.google.api.client.http.protobuf.ProtoHttpContent;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.ListenableFuture;
-import com.google.datastore.v1.AllocateIdsRequest;
-import com.google.datastore.v1.AllocateIdsResponse;
-import com.google.datastore.v1.BeginTransactionRequest;
-import com.google.datastore.v1.BeginTransactionResponse;
-import com.google.datastore.v1.CommitRequest;
-import com.google.datastore.v1.CommitResponse;
-import com.google.datastore.v1.LookupRequest;
-import com.google.datastore.v1.LookupResponse;
-import com.google.datastore.v1.Mutation;
-import com.google.datastore.v1.PartitionId;
-import com.google.datastore.v1.ReadOptions;
-import com.google.datastore.v1.RollbackRequest;
-import com.google.datastore.v1.RollbackResponse;
-import com.google.datastore.v1.RunQueryRequest;
-import com.google.datastore.v1.RunQueryResponse;
+import com.google.datastore.v1.*;
 import com.google.protobuf.ByteString;
-import com.ning.http.client.AsyncHttpClient;
-import com.ning.http.client.AsyncHttpClientConfig;
-import com.ning.http.client.Response;
-import com.ning.http.client.extra.ListenableFutureAdapter;
+import io.vertx.core.Future;
+import io.vertx.core.MultiMap;
+import io.vertx.core.Vertx;
+import io.vertx.core.buffer.Buffer;
+import io.vertx.core.http.HttpClient;
+import io.vertx.core.http.HttpClientOptions;
+import io.vertx.core.http.HttpClientResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.zip.GZIPInputStream;
 
@@ -74,24 +63,26 @@ public final class Datastore implements Closeable {
   public static final String USER_AGENT = "Datastore-Java-Client/" + VERSION + " (gzip)";
 
   private final DatastoreConfig config;
-  private final AsyncHttpClient client;
+//  private final AsyncHttpClient client;
+  private final HttpClient httpClient;
   private final String prefixUri;
 
   private final ScheduledExecutorService executor;
   private volatile String accessToken;
 
 
-  private Datastore(final DatastoreConfig config) {
+  private Datastore(final Vertx vertx, final DatastoreConfig config) {
     this.config = config;
-    final AsyncHttpClientConfig httpConfig = new AsyncHttpClientConfig.Builder()
-        .setConnectTimeout(config.getConnectTimeout())
-        .setRequestTimeout(config.getRequestTimeout())
-        .setMaxConnections(config.getMaxConnections())
-        .setMaxRequestRetry(config.getRequestRetry())
-        .setCompressionEnforced(true)
-        .build();
-
-    client = new AsyncHttpClient(httpConfig);
+    final HttpClientOptions httpClientOptions = new HttpClientOptions()
+            .setConnectTimeout(config.getConnectTimeout())
+            .setIdleTimeout(config.getRequestTimeout())
+            .setMaxPoolSize(config.getMaxConnections())
+            .setHttp2MaxPoolSize(config.getMaxConnections())
+            .setTryUseCompression(true);
+    //TODO: retry is missing, eg:
+//    final AsyncHttpClientConfig httpConfig = new AsyncHttpClientConfig.Builder()
+//        .setMaxRequestRetry(config.getRequestRetry())
+    httpClient = vertx.createHttpClient(httpClientOptions);
     prefixUri = String.format("%s/%s/projects/%s:", config.getHost(), config.getVersion(), config.getProject());
 
     executor = Executors.newSingleThreadScheduledExecutor();
@@ -105,14 +96,14 @@ public final class Datastore implements Closeable {
     }
   }
 
-  public static Datastore create(final DatastoreConfig config) {
-    return new Datastore(config);
+  public static Datastore create(final Vertx vertx, final DatastoreConfig config) {
+    return new Datastore(vertx, config);
   }
 
   @Override
   public void close() {
     executor.shutdown();
-    client.close();
+    httpClient.close();
   }
 
   private void refreshAccessToken() {
@@ -137,98 +128,145 @@ public final class Datastore implements Closeable {
     return statusCode >= 200 && statusCode < 300;
   }
 
-  private AsyncHttpClient.BoundRequestBuilder prepareRequest(final String method, final ProtoHttpContent payload) throws IOException {
-    final AsyncHttpClient.BoundRequestBuilder builder = client.preparePost(prefixUri + method);
-    builder.addHeader("Authorization", "Bearer " + accessToken);
-    builder.addHeader("Content-Type", "application/x-protobuf");
-    builder.addHeader("User-Agent", USER_AGENT);
-    builder.addHeader("Accept-Encoding", "gzip");
-    builder.setContentLength((int) payload.getLength());
-    builder.setBody(payload.getMessage().toByteArray());
-    return builder;
+  private <R> Function<HttpClientResponse, Future<R>> getResult(ThrowingFunction<InputStream, R> func) {
+    return (httpClientResponse -> {
+      Future<R> future = Future.future();
+      httpClientResponse.bodyHandler(body -> {
+        if(!isSuccessful(httpClientResponse.statusCode())) {
+          future.fail(new DatastoreException(httpClientResponse.statusCode(), body.toString()));
+        }
+        try {
+          future.complete(func.apply(streamBufferResponse(body, httpClientResponse.headers())));
+        } catch (Exception e) {
+          future.fail(e);
+        }
+      });
+      httpClientResponse.exceptionHandler(future::fail);
+      return future;
+    });
   }
 
-  private InputStream streamResponse(final Response response) throws IOException {
-    final InputStream input = response.getResponseBodyAsStream();
-    final boolean compressed = "gzip".equals(response.getHeader("Content-Encoding"));
-    return compressed ? new GZIPInputStream(input) : input;
+  public interface ThrowingFunction<T, R> {
+    R apply(T t) throws Exception;
   }
 
-  /**
-   * Start a new transaction.
-   *
-   * The returned {@code TransactionResult} contains the transaction if the
-   * request is successful.
-   *
-   * @return the result of the transaction request.
-   */
-  public TransactionResult transaction() throws DatastoreException {
-    return Futures.get(transactionAsync(), DatastoreException.class);
-  }
-
-  /**
-   * Start a new transaction.
-   *
-   * The returned {@code TransactionResult} contains the transaction if the
-   * request is successful.
-   *
-   * @return the result of the transaction request.
-   */
-  public ListenableFuture<TransactionResult> transactionAsync() {
-    final ListenableFuture<Response> httpResponse;
+  private Future<HttpClientResponse> initiateRequest(final String method, final ProtoHttpContent payload) {
+    Buffer buffer;
     try {
-      final BeginTransactionRequest.Builder request = BeginTransactionRequest.newBuilder();
-      final ProtoHttpContent payload = new ProtoHttpContent(request.build());
-      httpResponse = ListenableFutureAdapter.asGuavaFuture(prepareRequest("beginTransaction", payload).execute());
-    } catch (final Exception e) {
-      return Futures.immediateFailedFuture(new DatastoreException(e));
+      buffer = Buffer.buffer((int)payload.getLength());
+      payload.writeTo(new OutputStream() {
+        @Override
+        public void write(int b) throws IOException {
+          buffer.appendByte((byte)b);
+        }
+      });
+    } catch (IOException e) {
+      return Future.failedFuture(e);
     }
-    return Futures.transform(httpResponse, (Response response) -> {
-      if (!isSuccessful(response.getStatusCode())) {
-        throw new DatastoreException(response.getStatusCode(), response.getResponseBody());
+
+    Future<HttpClientResponse> doPost = Future.future();
+
+    httpClient.post(prefixUri + method)
+            .putHeader("Authorization", "Bearer " + accessToken)
+            .putHeader("Content-Type", "application/x-protobuf")
+            .putHeader("User-Agent", USER_AGENT)
+            .putHeader("Accept-Encoding", "gzip")
+            .handler(doPost::complete)
+            .exceptionHandler(doPost::fail)
+            .end(buffer);
+
+    return doPost;
+  }
+
+//  private AsyncHttpClient.BoundRequestBuilder prepareRequest(final String method, final ProtoHttpContent payload) throws IOException {
+//
+//    HttpClientRequest post = httpClient.post(prefixUri + method);
+//    post.headers().add("Authorization", "Bearer " + accessToken)
+//            .add("Content-Type", "application/x-protobuf")
+//            .add("User-Agent", USER_AGENT)
+//            .add("Accept-Encoding", "gzip");
+//    post.write()
+//
+//    final AsyncHttpClient.BoundRequestBuilder builder = client.preparePost(prefixUri + method);
+//    builder.addHeader("Authorization", "Bearer " + accessToken);
+//    builder.addHeader("Content-Type", "application/x-protobuf");
+//    builder.addHeader("User-Agent", USER_AGENT);
+//    builder.addHeader("Accept-Encoding", "gzip");
+//    builder.setContentLength((int) payload.getLength());
+//    builder.setBody(payload.getMessage().toByteArray());
+//    return builder;
+//  }
+
+//  private InputStream streamResponse(final Response response) throws IOException {
+//    final InputStream input = response.getResponseBodyAsStream();
+//    final boolean compressed = "gzip".equals(response.getHeader("Content-Encoding"));
+//    return compressed ? new GZIPInputStream(input) : input;
+//  }
+
+  private InputStream streamBufferResponse(final Buffer responseBody, MultiMap headers) throws IOException {
+    final InputStream bufferStream = new InputStream() {
+      private int curPos = 0;
+      private int len = responseBody.length();
+      @Override
+      public int read() throws IOException {
+        return curPos < len ? responseBody.getByte(curPos) : -1;
       }
-      final BeginTransactionResponse transaction = BeginTransactionResponse.parseFrom(streamResponse(response));
-      return Futures.immediateFuture(TransactionResult.build(transaction));
-    });
+    };
+    final boolean compressed = "gzip".equals(headers.get("Content-Encoding"));
+    return compressed ? new GZIPInputStream(bufferStream) : bufferStream;
+  }
+
+//  /**
+//   * Start a new transaction.
+//   *
+//   * The returned {@code TransactionResult} contains the transaction if the
+//   * request is successful.
+//   *
+//   * @return the result of the transaction request.
+//   */
+//  public TransactionResult transaction() throws DatastoreException {
+//    return Futures.get(transactionAsync(), DatastoreException.class);
+//  }
+
+  /**
+   * Start a new transaction.
+   *
+   * The returned {@code TransactionResult} contains the transaction if the
+   * request is successful.
+   *
+   * @return the result of the transaction request.
+   */
+  public Future<TransactionResult> transactionAsync() {
+
+    final BeginTransactionRequest.Builder request = BeginTransactionRequest.newBuilder();
+    final ProtoHttpContent payload = new ProtoHttpContent(request.build());
+
+    return initiateRequest("beginTransaction", payload).compose(getResult(result -> {
+      final BeginTransactionResponse transaction = BeginTransactionResponse.parseFrom(result);
+      return TransactionResult.build(transaction);
+    }));
   }
 
   /**
    * Rollback a given transaction.
    *
-   * You normally rollback a transaction in the event of d Datastore failure.
+   * You normally rollback a transaction in the event of a Datastore failure.
    *
    * @param txn the transaction.
    * @return the result of the rollback request.
    */
-  public RollbackResult rollback(final TransactionResult txn) throws DatastoreException {
-    return Futures.get(rollbackAsync(Futures.immediateFuture(txn)), DatastoreException.class);
-  }
+  public Future<RollbackResult> rollbackAsync(final TransactionResult txn) {
+    final ByteString transaction = txn.getTransaction();
+    if(transaction == null) {
+      return Future.failedFuture(new DatastoreException("Invalid transaction."));
+    }
+    final RollbackRequest.Builder request = RollbackRequest.newBuilder();
+    final ProtoHttpContent payload = new ProtoHttpContent(request.build());
 
-  /**
-   * Rollback a given transaction.
-   *
-   * You normally rollback a transaction in the event of d Datastore failure.
-   *
-   * @param txn the transaction.
-   * @return the result of the rollback request.
-   */
-  public ListenableFuture<RollbackResult> rollbackAsync(final ListenableFuture<TransactionResult> txn) {
-    final ListenableFuture<Response> httpResponse = Futures.transform(txn, (TransactionResult result) -> {
-      final ByteString transaction = result.getTransaction();
-      if (transaction == null) {
-        throw new DatastoreException("Invalid transaction.");
-      }
-      final RollbackRequest.Builder request = RollbackRequest.newBuilder();
-      final ProtoHttpContent payload = new ProtoHttpContent(request.build());
-      return ListenableFutureAdapter.asGuavaFuture(prepareRequest("rollback", payload).execute());
-    });
-    return Futures.transform(httpResponse, (Response response) -> {
-      if (!isSuccessful(response.getStatusCode())) {
-        throw new DatastoreException(response.getStatusCode(), response.getResponseBody());
-      }
-      final RollbackResponse rollback = RollbackResponse.parseFrom(streamResponse(response));
-      return Futures.immediateFuture(RollbackResult.build(rollback));
-    });
+    return initiateRequest("rollback", payload).compose(getResult(result -> {
+      final RollbackResponse rollback = RollbackResponse.parseFrom(result);
+      return RollbackResult.build(rollback);
+    }));
   }
 
   /**
@@ -240,20 +278,7 @@ public final class Datastore implements Closeable {
    * @param txn the transaction.
    * @return the result of the commit request.
    */
-  public MutationResult commit(final TransactionResult txn) throws DatastoreException {
-    return Futures.get(executeAsync((MutationStatement) null, Futures.immediateFuture(txn)), DatastoreException.class);
-  }
-
-  /**
-   * Commit a given transaction.
-   *
-   * You normally manually commit a transaction after performing read-only
-   * operations without mutations.
-   *
-   * @param txn the transaction.
-   * @return the result of the commit request.
-   */
-  public ListenableFuture<MutationResult> commitAsync(final ListenableFuture<TransactionResult> txn) {
+  public Future<MutationResult> commitAsync(final TransactionResult txn) {
     return executeAsync((MutationStatement) null, txn);
   }
 
@@ -263,33 +288,16 @@ public final class Datastore implements Closeable {
    * @param statement the statement to execute.
    * @return the result of the allocate ids request.
    */
-  public AllocateIdsResult execute(final AllocateIds statement) throws DatastoreException {
-    return Futures.get(executeAsync(statement), DatastoreException.class);
-  }
+  public Future<AllocateIdsResult> executeAsync(final AllocateIds statement) {
 
-  /**
-   * Execute a allocate ids statement.
-   *
-   * @param statement the statement to execute.
-   * @return the result of the allocate ids request.
-   */
-  public ListenableFuture<AllocateIdsResult> executeAsync(final AllocateIds statement) {
-    final ListenableFuture<Response> httpResponse;
-    try {
-      final AllocateIdsRequest.Builder request = AllocateIdsRequest.newBuilder()
-          .addAllKeys(statement.getPb(config.getNamespace()));
-      final ProtoHttpContent payload = new ProtoHttpContent(request.build());
-      httpResponse = ListenableFutureAdapter.asGuavaFuture(prepareRequest("allocateIds", payload).execute());
-    } catch (final Exception e) {
-      return Futures.immediateFailedFuture(new DatastoreException(e));
-    }
-    return Futures.transform(httpResponse, (Response response) -> {
-      if (!isSuccessful(response.getStatusCode())) {
-        throw new DatastoreException(response.getStatusCode(), response.getResponseBody());
-      }
-      final AllocateIdsResponse allocate = AllocateIdsResponse.parseFrom(streamResponse(response));
-      return Futures.immediateFuture(AllocateIdsResult.build(allocate));
-    });
+    final AllocateIdsRequest.Builder request = AllocateIdsRequest.newBuilder()
+            .addAllKeys(statement.getPb(config.getNamespace()));
+    final ProtoHttpContent payload = new ProtoHttpContent(request.build());
+
+    return initiateRequest("allocateIds", payload).compose(getResult(result -> {
+      final AllocateIdsResponse allocate = AllocateIdsResponse.parseFrom(result);
+      return AllocateIdsResult.build(allocate);
+    }));
   }
 
   /**
@@ -298,8 +306,8 @@ public final class Datastore implements Closeable {
    * @param statement the statement to execute.
    * @return the result of the query request.
    */
-  public QueryResult execute(final KeyQuery statement) throws DatastoreException {
-    return Futures.get(executeAsync(statement), DatastoreException.class);
+  public Future<QueryResult> executeAsync(final KeyQuery statement) {
+    return executeAsync(statement, TransactionResult.build());
   }
 
   /**
@@ -308,28 +316,8 @@ public final class Datastore implements Closeable {
    * @param statements the statements to execute.
    * @return the result of the query request.
    */
-  public QueryResult execute(final List<KeyQuery> statements) throws DatastoreException {
-    return Futures.get(executeAsync(statements), DatastoreException.class);
-  }
-
-  /**
-   * Execute a keyed query statement.
-   *
-   * @param statement the statement to execute.
-   * @return the result of the query request.
-   */
-  public ListenableFuture<QueryResult> executeAsync(final KeyQuery statement) {
-    return executeAsync(statement, Futures.immediateFuture(TransactionResult.build()));
-  }
-
-  /**
-   * Execute a multi-keyed query statement.
-   *
-   * @param statements the statements to execute.
-   * @return the result of the query request.
-   */
-  public ListenableFuture<QueryResult> executeAsync(final List<KeyQuery> statements) {
-    return executeAsync(statements, Futures.immediateFuture(TransactionResult.build()));
+  public Future<QueryResult> executeAsync(final List<KeyQuery> statements) {
+    return executeAsync(statements, TransactionResult.build());
   }
 
   /**
@@ -339,29 +327,7 @@ public final class Datastore implements Closeable {
    * @param txn the transaction to execute the query.
    * @return the result of the query request.
    */
-  public QueryResult execute(final KeyQuery statement, final TransactionResult txn) throws DatastoreException {
-    return Futures.get(executeAsync(statement, Futures.immediateFuture(txn)), DatastoreException.class);
-  }
-
-  /**
-   * Execute a multi-keyed query statement in a given transaction.
-   *
-   * @param statements the statements to execute.
-   * @param txn the transaction to execute the query.
-   * @return the result of the query request.
-   */
-  public QueryResult execute(final List<KeyQuery> statements, final TransactionResult txn) throws DatastoreException {
-    return Futures.get(executeAsync(statements, Futures.immediateFuture(txn)), DatastoreException.class);
-  }
-
-  /**
-   * Execute a keyed query statement in a given transaction.
-   *
-   * @param statement the statement to execute.
-   * @param txn the transaction to execute the query.
-   * @return the result of the query request.
-   */
-  public ListenableFuture<QueryResult> executeAsync(final KeyQuery statement, final ListenableFuture<TransactionResult> txn) {
+  public Future<QueryResult> executeAsync(final KeyQuery statement, final TransactionResult txn) {
     return executeAsync(ImmutableList.of(statement), txn);
   }
 
@@ -372,25 +338,19 @@ public final class Datastore implements Closeable {
    * @param txn the transaction to execute the query.
    * @return the result of the query request.
    */
-  public ListenableFuture<QueryResult> executeAsync(final List<KeyQuery> statements, final ListenableFuture<TransactionResult> txn) {
-    final ListenableFuture<Response> httpResponse = Futures.transform(txn, (TransactionResult result) -> {
-      final List<com.google.datastore.v1.Key> keys = statements
-        .stream().map(s -> s.getKey().getPb(config.getNamespace())).collect(Collectors.toList());
-      final LookupRequest.Builder request = LookupRequest.newBuilder().addAllKeys(keys);
-      final ByteString transaction = result.getTransaction();
-      if (transaction != null) {
-        request.setReadOptions(ReadOptions.newBuilder().setTransaction(transaction));
-      }
-      final ProtoHttpContent payload = new ProtoHttpContent(request.build());
-      return ListenableFutureAdapter.asGuavaFuture(prepareRequest("lookup", payload).execute());
-    });
-    return Futures.transform(httpResponse, (Response response) -> {
-      if (!isSuccessful(response.getStatusCode())) {
-        throw new DatastoreException(response.getStatusCode(), response.getResponseBody());
-      }
-      final LookupResponse query = LookupResponse.parseFrom(streamResponse(response));
-      return Futures.immediateFuture(QueryResult.build(query));
-    });
+  public Future<QueryResult> executeAsync(final List<KeyQuery> statements, final TransactionResult txn) {
+    final List<com.google.datastore.v1.Key> keys = statements
+            .stream().map(s -> s.getKey().getPb(config.getNamespace())).collect(Collectors.toList());
+    final LookupRequest.Builder request = LookupRequest.newBuilder().addAllKeys(keys);
+    final ByteString transaction = txn.getTransaction();
+    if (transaction != null) {
+      request.setReadOptions(ReadOptions.newBuilder().setTransaction(transaction));
+    }
+    final ProtoHttpContent payload = new ProtoHttpContent(request.build());
+    return initiateRequest("lookup", payload).compose(getResult(result -> {
+      final LookupResponse query = LookupResponse.parseFrom(result);
+      return QueryResult.build(query);
+    }));
   }
 
   /**
@@ -399,18 +359,8 @@ public final class Datastore implements Closeable {
    * @param statement the statement to execute.
    * @return the result of the mutation request.
    */
-  public MutationResult execute(final MutationStatement statement) throws DatastoreException {
-    return Futures.get(executeAsync(statement), DatastoreException.class);
-  }
-
-  /**
-   * Execute a mutation query statement.
-   *
-   * @param statement the statement to execute.
-   * @return the result of the mutation request.
-   */
-  public ListenableFuture<MutationResult> executeAsync(final MutationStatement statement) {
-    return executeAsync(statement, Futures.immediateFuture(TransactionResult.build()));
+  public Future<MutationResult> executeAsync(final MutationStatement statement) {
+    return executeAsync(statement, TransactionResult.build());
   }
 
   /**
@@ -420,18 +370,7 @@ public final class Datastore implements Closeable {
    * @param txn the transaction to execute the query.
    * @return the result of the mutation request.
    */
-  public MutationResult execute(final MutationStatement statement, final TransactionResult txn) throws DatastoreException {
-    return Futures.get(executeAsync(statement, Futures.immediateFuture(txn)), DatastoreException.class);
-  }
-
-  /**
-   * Execute a mutation query statement in a given transaction.
-   *
-   * @param statement the statement to execute.
-   * @param txn the transaction to execute the query.
-   * @return the result of the mutation request.
-   */
-  public ListenableFuture<MutationResult> executeAsync(final MutationStatement statement, final ListenableFuture<TransactionResult> txn) {
+  public Future<MutationResult> executeAsync(final MutationStatement statement, final TransactionResult txn) {
     final List<Mutation> mutations = Optional
       .ofNullable(statement)
       .flatMap(s -> Optional.of(ImmutableList.of(s.getPb(config.getNamespace()))))
@@ -440,15 +379,6 @@ public final class Datastore implements Closeable {
     return executeAsyncMutations(mutations, txn);
   }
 
-  /**
-   * Execute a batch mutation query statement.
-   *
-   * @param batch to execute.
-   * @return the result of the mutation request.
-   */
-  public MutationResult execute(final Batch batch) throws DatastoreException {
-    return Futures.get(executeAsync(batch), DatastoreException.class);
-  }
 
   /**
    * Execute a batch mutation query statement.
@@ -456,8 +386,8 @@ public final class Datastore implements Closeable {
    * @param batch to execute.
    * @return the result of the mutation request.
    */
-  public ListenableFuture<MutationResult> executeAsync(final Batch batch) {
-    return executeAsync(batch, Futures.immediateFuture(TransactionResult.build()));
+  public Future<MutationResult> executeAsync(final Batch batch) {
+    return executeAsync(batch, TransactionResult.build());
   }
 
   /**
@@ -467,44 +397,28 @@ public final class Datastore implements Closeable {
    * @param txn the transaction to execute the query.
    * @return the result of the mutation request.
    */
-  public MutationResult execute(final Batch batch, final TransactionResult txn) throws DatastoreException {
-    return Futures.get(executeAsync(batch, Futures.immediateFuture(txn)), DatastoreException.class);
-  }
-
-  /**
-   * Execute a batch mutation query statement in a given transaction.
-   *
-   * @param batch to execute.
-   * @param txn the transaction to execute the query.
-   * @return the result of the mutation request.
-   */
-  public ListenableFuture<MutationResult> executeAsync(final Batch batch, final ListenableFuture<TransactionResult> txn) {
+  public Future<MutationResult> executeAsync(final Batch batch, final TransactionResult txn) {
     return executeAsyncMutations(batch.getPb(config.getNamespace()), txn);
   }
 
-  private ListenableFuture<MutationResult> executeAsyncMutations(final List<Mutation> mutations, final ListenableFuture<TransactionResult> txn) {
-    final ListenableFuture<Response> httpResponse = Futures.transform(txn, (TransactionResult result) -> {
-      final CommitRequest.Builder request = CommitRequest.newBuilder();
-      if (mutations != null) {
-        request.addAllMutations(mutations);
-      }
+  private Future<MutationResult> executeAsyncMutations(final List<Mutation> mutations, final TransactionResult txn) {
+    final CommitRequest.Builder request = CommitRequest.newBuilder();
+    if (mutations != null) {
+      request.addAllMutations(mutations);
+    }
 
-      final ByteString transaction = result.getTransaction();
-      if (transaction != null) {
-        request.setTransaction(transaction);
-      } else {
-        request.setMode(CommitRequest.Mode.NON_TRANSACTIONAL);
-      }
-      final ProtoHttpContent payload = new ProtoHttpContent(request.build());
-      return ListenableFutureAdapter.asGuavaFuture(prepareRequest("commit", payload).execute());
-    });
-    return Futures.transform(httpResponse, (Response response) -> {
-      if (!isSuccessful(response.getStatusCode())) {
-        throw new DatastoreException(response.getStatusCode(), response.getResponseBody());
-      }
-      final CommitResponse commit = CommitResponse.parseFrom(streamResponse(response));
-      return Futures.immediateFuture(MutationResult.build(commit));
-    });
+    final ByteString transaction = txn.getTransaction();
+    if (transaction != null) {
+      request.setTransaction(transaction);
+    } else {
+      request.setMode(CommitRequest.Mode.NON_TRANSACTIONAL);
+    }
+
+    final ProtoHttpContent payload = new ProtoHttpContent(request.build());
+    return initiateRequest("commit", payload).compose(getResult(result -> {
+      final CommitResponse commit = CommitResponse.parseFrom(result);
+      return MutationResult.build(commit);
+    }));
   }
 
   /**
@@ -513,18 +427,8 @@ public final class Datastore implements Closeable {
    * @param statement the statement to execute.
    * @return the result of the query request.
    */
-  public QueryResult execute(final Query statement) throws DatastoreException {
-    return Futures.get(executeAsync(statement), DatastoreException.class);
-  }
-
-  /**
-   * Execute a query statement.
-   *
-   * @param statement the statement to execute.
-   * @return the result of the query request.
-   */
-  public ListenableFuture<QueryResult> executeAsync(final Query statement) {
-    return executeAsync(statement, Futures.immediateFuture(TransactionResult.build()));
+  public Future<QueryResult> executeAsync(final Query statement) {
+    return executeAsync(statement, TransactionResult.build());
   }
 
   /**
@@ -534,38 +438,21 @@ public final class Datastore implements Closeable {
    * @param txn the transaction to execute the query.
    * @return the result of the query request.
    */
-  public QueryResult execute(final Query statement, final TransactionResult txn) throws DatastoreException {
-    return Futures.get(executeAsync(statement, Futures.immediateFuture(txn)), DatastoreException.class);
-  }
-
-  /**
-   * Execute a query statement in a given transaction.
-   *
-   * @param statement the statement to execute.
-   * @param txn the transaction to execute the query.
-   * @return the result of the query request.
-   */
-  public ListenableFuture<QueryResult> executeAsync(final Query statement, final ListenableFuture<TransactionResult> txn) {
-    final ListenableFuture<Response> httpResponse = Futures.transform(txn, (TransactionResult result) -> {
-      final String namespace = config.getNamespace();
-      final RunQueryRequest.Builder request = RunQueryRequest.newBuilder()
-        .setQuery(statement.getPb(namespace != null ? namespace : ""));
-      if (namespace != null) {
-        request.setPartitionId(PartitionId.newBuilder().setNamespaceId(namespace));
-      }
-      final ByteString transaction = result.getTransaction();
-      if (transaction != null) {
-        request.setReadOptions(ReadOptions.newBuilder().setTransaction(transaction));
-      }
-      final ProtoHttpContent payload = new ProtoHttpContent(request.build());
-      return ListenableFutureAdapter.asGuavaFuture(prepareRequest("runQuery", payload).execute());
-    });
-    return Futures.transform(httpResponse, (Response response) -> {
-      if (!isSuccessful(response.getStatusCode())) {
-        throw new DatastoreException(response.getStatusCode(), response.getResponseBody());
-      }
-      final RunQueryResponse query = RunQueryResponse.parseFrom(streamResponse(response));
-      return Futures.immediateFuture(QueryResult.build(query));
-    });
+  public Future<QueryResult> executeAsync(final Query statement, final TransactionResult txn) {
+    final String namespace = config.getNamespace();
+    final RunQueryRequest.Builder request = RunQueryRequest.newBuilder()
+            .setQuery(statement.getPb(namespace != null ? namespace : ""));
+    if (namespace != null) {
+      request.setPartitionId(PartitionId.newBuilder().setNamespaceId(namespace));
+    }
+    final ByteString transaction = txn.getTransaction();
+    if (transaction != null) {
+      request.setReadOptions(ReadOptions.newBuilder().setTransaction(transaction));
+    }
+    final ProtoHttpContent payload = new ProtoHttpContent(request.build());
+    return initiateRequest("runQuery", payload).compose(getResult(result -> {
+      final RunQueryResponse query = RunQueryResponse.parseFrom(result);
+      return QueryResult.build(query);
+    }));
   }
 }

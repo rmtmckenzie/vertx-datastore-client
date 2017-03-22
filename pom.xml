@@ -28,16 +28,11 @@
         </license>
     </licenses>
 
-    <organization>
-        <name>Spotify AB</name>
-        <url>http://www.spotify.com</url>
-    </organization>
-
     <developers>
         <developer>
-            <id>alan</id>
-            <email>alan@spotify.com</email>
-            <name>Alan Wright</name>
+            <id>rmtmckenzie</id>
+            <email>rmtmckenzie@gmail.com</email>
+            <name>Morgan McKenzie</name>
         </developer>
     </developers>
 
@@ -60,10 +55,21 @@
     </distributionManagement>
 
     <dependencies>
+        <!--<dependency>-->
+            <!--<groupId>com.ning</groupId>-->
+            <!--<artifactId>async-http-client</artifactId>-->
+            <!--<version>1.9.8</version>-->
+        <!--</dependency>-->
+
         <dependency>
-            <groupId>com.ning</groupId>
-            <artifactId>async-http-client</artifactId>
-            <version>1.9.8</version>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>1.7.25</version>
+        </dependency>
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-web</artifactId>
+            <version>3.4.1</version>
         </dependency>
         <dependency>
             <groupId>com.google.guava</groupId>
@@ -80,6 +86,12 @@
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
             <version>4.12</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-unit</artifactId>
+            <version>3.4.1</version>
             <scope>test</scope>
         </dependency>
         <dependency>

@@ -18,23 +18,12 @@ package com.spotify.asyncdatastoreclient.example;
 
 import com.google.api.client.googleapis.auth.oauth2.GoogleCredential;
 import com.google.common.base.Throwables;
-import com.google.common.util.concurrent.FutureCallback;
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.ListenableFuture;
-import com.spotify.asyncdatastoreclient.Batch;
-import com.spotify.asyncdatastoreclient.Datastore;
-import com.spotify.asyncdatastoreclient.DatastoreConfig;
-import com.spotify.asyncdatastoreclient.Entity;
-import com.spotify.asyncdatastoreclient.Insert;
-import com.spotify.asyncdatastoreclient.KeyQuery;
-import com.spotify.asyncdatastoreclient.MutationResult;
-import com.spotify.asyncdatastoreclient.Query;
-import com.spotify.asyncdatastoreclient.QueryBuilder;
-import com.spotify.asyncdatastoreclient.QueryResult;
-import com.spotify.asyncdatastoreclient.TransactionResult;
+import com.spotify.asyncdatastoreclient.*;
+import io.vertx.core.CompositeFuture;
+import io.vertx.core.Future;
+import io.vertx.core.Vertx;
 
 import java.util.Date;
-import java.util.List;
 
 import static com.spotify.asyncdatastoreclient.QueryBuilder.asc;
 import static com.spotify.asyncdatastoreclient.QueryBuilder.eq;
@@ -47,7 +36,7 @@ public final class ExampleAsync {
   private ExampleAsync() {
   }
 
-  private static ListenableFuture<MutationResult> addData(final Datastore datastore) {
+  private static Future<MutationResult> addData(final Datastore datastore) {
     final Insert insert = QueryBuilder.insert("employee", 1234567L)
         .value("fullname", "Fred Blinge")
         .value("inserted", new Date())
@@ -55,26 +44,25 @@ public final class ExampleAsync {
     return datastore.executeAsync(insert);
   }
 
-  private static ListenableFuture<MutationResult> addDataInTransaction(final Datastore datastore) {
-    final ListenableFuture<TransactionResult> txn = datastore.transactionAsync();
+  private static Future<MutationResult> addDataInTransaction(final Datastore datastore) {
+    return datastore.transactionAsync().compose(txn -> {
+      final KeyQuery get = QueryBuilder.query("employee", 2345678L);
+      return datastore.executeAsync(get, txn).compose((QueryResult result) -> {
+        if (result.getEntity() == null) {
+          datastore.rollbackAsync(txn); // fire and forget
+          return Future.succeededFuture(MutationResult.build());
+        }
 
-    final KeyQuery get = QueryBuilder.query("employee", 2345678L);
-
-    return Futures.transform(datastore.executeAsync(get, txn), (QueryResult result) -> {
-      if (result.getEntity() == null) {
-        datastore.rollbackAsync(txn); // fire and forget
-        return Futures.immediateFuture(MutationResult.build());
-      }
-
-      final Insert insert = QueryBuilder.insert("employee", 2345678L)
-          .value("fullname", "Fred Blinge")
-          .value("inserted", new Date())
-          .value("age", 40);
-      return datastore.executeAsync(insert);
+        final Insert insert = QueryBuilder.insert("employee", 2345678L)
+            .value("fullname", "Fred Blinge")
+            .value("inserted", new Date())
+            .value("age", 40);
+        return datastore.executeAsync(insert);
+      });
     });
   }
 
-  private static ListenableFuture<QueryResult> queryData(final Datastore datastore) {
+  private static Future<QueryResult> queryData(final Datastore datastore) {
     final Query get = QueryBuilder.query()
         .kindOf("employee")
         .filterBy(eq("age", 40))
@@ -82,7 +70,7 @@ public final class ExampleAsync {
     return datastore.executeAsync(get);
   }
 
-  private static ListenableFuture<MutationResult> deleteData(final Datastore datastore) {
+  private static Future<MutationResult> deleteData(final Datastore datastore) {
     final Batch delete = QueryBuilder.batch()
         .add(QueryBuilder.delete("employee", 1234567L))
         .add(QueryBuilder.delete("employee", 2345678L));
@@ -90,6 +78,8 @@ public final class ExampleAsync {
   }
 
   public static void main(final String... args) throws Exception {
+    Vertx vertx = Vertx.vertx();
+
     final DatastoreConfig config = DatastoreConfig.builder()
         .connectTimeout(5000)
         .requestTimeout(1000)
@@ -100,20 +90,19 @@ public final class ExampleAsync {
         .credential(GoogleCredential.getApplicationDefault())
         .build();
 
-    final Datastore datastore = Datastore.create(config);
+    final Datastore datastore = Datastore.create(vertx, config);
 
     // Add a two entities asynchronously
-    final ListenableFuture<MutationResult> addFirst = addData(datastore);
-    final ListenableFuture<MutationResult> addSecond = addDataInTransaction(datastore);
-    final ListenableFuture<List<Object>> addBoth = Futures.allAsList(addFirst, addSecond);
+    final Future<MutationResult> addFirst = addData(datastore);
+    final Future<MutationResult> addSecond = addDataInTransaction(datastore);
+
+    final CompositeFuture addBoth = CompositeFuture.all(addFirst, addSecond);
 
     // Query the entities we've just inserted
-    final ListenableFuture<QueryResult> query = Futures.transform(addBoth, (List<Object> result) -> {
-      return queryData(datastore);
-    });
+    final Future<QueryResult> query = addBoth.compose(compositeFuture -> queryData(datastore));
 
     // Print the query results before clean up
-    final ListenableFuture<MutationResult> delete = Futures.transform(query, (QueryResult result) -> {
+    final Future<MutationResult> delete = query.compose((QueryResult result) -> {
       for (final Entity entity : result) {
         System.out.println("Employee name: " + entity.getString("fullname"));
         System.out.println("Employee age: " + entity.getInteger("age"));
@@ -121,15 +110,11 @@ public final class ExampleAsync {
       return deleteData(datastore);
     });
 
-    Futures.addCallback(delete, new FutureCallback<MutationResult>() {
-      @Override
-      public void onSuccess(final MutationResult result) {
+    delete.setHandler(operationsResult -> {
+      if(operationsResult.succeeded()) {
         System.out.println("All complete.");
-      }
-
-      @Override
-      public void onFailure(final Throwable throwable) {
-        System.err.println("Storage exception: " + Throwables.getRootCause(throwable).getMessage());
+      } else {
+        System.err.println("Storage exception: " + Throwables.getRootCause(operationsResult.cause()).getMessage());
       }
     });
   }

@@ -16,43 +16,48 @@
 
 package com.spotify.asyncdatastoreclient;
 
+import io.vertx.ext.unit.TestContext;
+import io.vertx.ext.unit.junit.VertxUnitRunner;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.junit.runner.RunWith;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-
+@RunWith(VertxUnitRunner.class)
 @Category(IntegrationTest.class)
 public class DeleteTest extends DatastoreTest {
 
   @Test
-  public void testDeleteEntity() throws Exception {
+  public void testDeleteEntity(TestContext context) throws Exception {
     final Insert insert = QueryBuilder.insert("employee", 1234567L)
         .value("fullname", "Fred Blinge")
         .value("age", 40, false);
-    datastore.execute(insert);
 
-    final Delete delete = QueryBuilder.delete("employee", 1234567L);
-    final MutationResult result = datastore.execute(delete);
-    assertTrue(result.getIndexUpdates() > 0);
+    datastore.executeAsync(insert).compose(insertSuccessful -> {
+      final Delete delete = QueryBuilder.delete("employee", 1234567L);
+      return datastore.executeAsync(delete);
+    }).setHandler(context.asyncAssertSuccess(deleteResult -> {
+      context.assertTrue(deleteResult.getIndexUpdates() > 0);
+    }));
   }
 
   @Test
-  public void testDeleteNotExists() throws Exception {
+  public void testDeleteNotExists(TestContext context) throws Exception {
     final Delete delete = QueryBuilder.delete("employee", 1234567L);
-    final MutationResult result = datastore.execute(delete);
-    assertEquals(0, result.getIndexUpdates());
+    datastore.executeAsync(delete).setHandler(context.asyncAssertSuccess(deleteResult -> {
+      context.assertEquals(0, deleteResult.getIndexUpdates());
+    }));
   }
 
   @Test
-  public void testDeleteByKey() throws Exception {
+  public void testDeleteByKey(TestContext context) throws Exception {
     final Insert insert = QueryBuilder.insert("employee", 1234567L)
         .value("fullname", "Fred Blinge")
         .value("age", 40, false);
-    datastore.execute(insert);
-
-    final Delete delete = QueryBuilder.delete(Key.builder("employee", 1234567L).build());
-    final MutationResult result = datastore.execute(delete);
-    assertTrue(result.getIndexUpdates() > 0);
+    datastore.executeAsync(insert).compose(insertResult -> {
+      final Delete delete = QueryBuilder.delete(Key.builder("employee", 1234567L).build());
+      return datastore.executeAsync(delete);
+    }).setHandler(context.asyncAssertSuccess(deleteResult -> {
+      context.assertTrue(deleteResult.getIndexUpdates() > 0);
+    }));
   }
 }

@@ -16,156 +16,167 @@
 
 package com.spotify.asyncdatastoreclient;
 
-import com.google.common.base.Throwables;
-import com.google.common.util.concurrent.FutureCallback;
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.ListenableFuture;
-
+import io.vertx.ext.unit.TestContext;
+import io.vertx.ext.unit.junit.VertxUnitRunner;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.junit.runner.RunWith;
 
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.fail;
 
+@RunWith(VertxUnitRunner.class)
 @Category(IntegrationTest.class)
 public class TransactionTest extends DatastoreTest {
 
   @Test
-  public void testInsert() throws Exception {
-    final TransactionResult txn = datastore.transaction();
-
-    final Insert insert = QueryBuilder.insert("employee")
-        .value("fullname", "Fred Blinge")
-        .value("age", 40, false);
-
-    final MutationResult insertResult = datastore.execute(insert, txn);
-
-    final KeyQuery get = QueryBuilder.query(insertResult.getInsertKey());
-    final QueryResult getResult = datastore.execute(get);
-
-    assertEquals("Fred Blinge", getResult.getEntity().getString("fullname"));
-    assertEquals(40, getResult.getEntity().getInteger("age").intValue());
-  }
-
-  @Test
-  public void testInsertAsync() throws Exception {
-    final ListenableFuture<TransactionResult> txn = datastore.transactionAsync();
-
-    final Insert insert = QueryBuilder.insert("employee")
-        .value("fullname", "Fred Blinge")
-        .value("age", 40, false);
-
-    final ListenableFuture<MutationResult> insertResult = datastore.executeAsync(insert, txn);
-
-    final ListenableFuture<QueryResult> getResult = Futures.transform(insertResult, (MutationResult mutationResult) -> {
-      final KeyQuery get = QueryBuilder.query(mutationResult.getInsertKey());
+  public void testInsert(TestContext context) throws Exception {
+    datastore.transactionAsync().compose(txn -> {
+      final Insert insert = QueryBuilder.insert("employee")
+          .value("fullname", "Fred Blinge")
+          .value("age", 40, false);
+      return datastore.executeAsync(insert, txn);
+    }).compose(insertResult -> {
+      final KeyQuery get = QueryBuilder.query(insertResult.getInsertKey());
       return datastore.executeAsync(get);
-    });
+    }).setHandler(context.asyncAssertSuccess(getResult -> {
+      context.assertEquals("Fred Blinge", getResult.getEntity().getString("fullname"));
+      context.assertEquals(40, getResult.getEntity().getInteger("age"));
+    }));
+  }
 
-    Futures.addCallback(getResult, new FutureCallback<QueryResult>() {
-      @Override
-      public void onSuccess(final QueryResult result) {
-        assertEquals("Fred Blinge", result.getEntity().getString("fullname"));
-        assertEquals(40, result.getEntity().getInteger("age").intValue());
+  @Test
+  public void testGetThenInsert(TestContext context) throws Exception {
+    datastore.transactionAsync().compose(txn -> {
+      final KeyQuery get = QueryBuilder.query("employee", 1234567L);
+      return datastore.executeAsync(get, txn).compose(getResult -> {
+        assertEquals(0, getResult.getAll().size());
+        final Insert insert = QueryBuilder.insert("employee", 1234567L)
+                .value("fullname", "Fred Blinge")
+                .value("age", 40, false);
+        return datastore.executeAsync(insert, txn);
+      });
+    }).setHandler(context.asyncAssertSuccess(insertResult -> {
+      context.assertTrue(insertResult.getIndexUpdates() > 0);
+    }));
+  }
+
+  @Test
+  public void testTransactionExpired(TestContext context) throws Exception {
+    datastore.transactionAsync().compose(txn -> {
+      final Insert insertFirst = QueryBuilder.insert("employee")
+              .value("fullname", "Fred Blinge")
+              .value("age", 40, false);
+      return datastore.executeAsync(insertFirst).compose(firstInsertResult -> {
+        final Insert insertSecond = QueryBuilder.insert("employee")
+                .value("fullname", "Fred Blinge")
+                .value("age", 40, false);
+        return datastore.executeAsync(insertSecond, txn);
+      });
+    }).setHandler(context.asyncAssertFailure(cause -> {
+      if(cause instanceof DatastoreException) {
+        context.assertEquals(400, ((DatastoreException)cause).getStatusCode()); // bad request
+      } else {
+        context.fail(cause);
       }
+    }));
+  }
 
-      @Override
-      public void onFailure(final Throwable throwable) {
-        fail(Throwables.getRootCause(throwable).getMessage());
+  @Test
+  public void testTransactionWriteConflict(TestContext context) throws Exception {
+    final Insert insert = QueryBuilder.insert("employee", 1234567L)
+        .value("fullname", "Fred Blinge")
+        .value("age", 40, false);
+    datastore.executeAsync(insert).compose(insertResult -> {
+      return datastore.transactionAsync(); // initiate transition
+    }).compose(txn -> {
+      final KeyQuery get = QueryBuilder.query("employee", 1234567L);
+      return datastore.executeAsync(get).compose(getResult -> {
+        context.assertNotNull(getResult.getEntity());
+        final Update update = QueryBuilder.update("employee", 1234567L)
+                .value("age", 41, false);
+        return datastore.executeAsync(update); // update outside transaction
+      }).compose(updateResult -> {
+        final Update update = QueryBuilder.update("employee", 1234567L)
+                .value("age", 41, false);
+        return datastore.executeAsync(update, txn); // update within transaction
+      });
+    }).setHandler(context.asyncAssertFailure(secondUpdateFailure -> {
+      // ensure that update using transaction after updating outside transaction fails
+      if(secondUpdateFailure instanceof DatastoreException) {
+        assertEquals(409, ((DatastoreException)secondUpdateFailure).getStatusCode().intValue()); // conflict
+      } else {
+        context.fail(secondUpdateFailure);
       }
-    });
+    }));
   }
 
   @Test
-  public void testGetThenInsert() throws Exception {
-    final TransactionResult txn = datastore.transaction();
-
-    final KeyQuery get = QueryBuilder.query("employee", 1234567L);
-    final QueryResult getResult = datastore.execute(get, txn);
-    assertEquals(0, getResult.getAll().size());
-
+  public void testTransactionRead(TestContext context) throws Exception {
     final Insert insert = QueryBuilder.insert("employee", 1234567L)
         .value("fullname", "Fred Blinge")
         .value("age", 40, false);
+    datastore.executeAsync(insert).compose(insertResult -> {
+      return datastore.transactionAsync(); // initiate transition
+    }).compose(txn -> {
+      final KeyQuery get = QueryBuilder.query("employee", 1234567L);
+      return datastore.executeAsync(get, txn).compose(getResult1 -> {
+        context.assertEquals(40, getResult1.getEntity().getInteger("age"));
 
-    final MutationResult insertResult = datastore.execute(insert, txn);
-    assertTrue(insertResult.getIndexUpdates() > 0);
+        final Update update = QueryBuilder.update("employee", 1234567L)
+                .value("age", 41, false);
+        return datastore.executeAsync(update);
+      }).compose(afterUpdate -> {
+        return datastore.executeAsync(get, txn); // read inside transaction
+      });
+    }).setHandler(context.asyncAssertSuccess(getResult2 -> {
+      context.assertEquals(40, getResult2.getEntity().getInteger("age"));
+    }));
   }
 
   @Test
-  public void testTransactionExpired() throws Exception {
-    final TransactionResult txn = datastore.transaction();
+  public void testInsertBatchInTransaction(TestContext context) throws Exception {
+    datastore.transactionAsync().compose(txn -> {
+      final Key parent = Key.builder("parent", "root").build();
 
-    final Insert insertFirst = QueryBuilder.insert("employee")
-        .value("fullname", "Fred Blinge")
-        .value("age", 40, false);
+      final Insert insert1 = QueryBuilder.insert(Key.builder("employee", parent).build())
+              .value("fullname", "Jack Spratt")
+              .value("age", 21, false);
 
-    datastore.execute(insertFirst, txn);
+      final Insert insert2 = QueryBuilder.insert(Key.builder("employee", parent).build())
+              .value("fullname", "Fred Blinge")
+              .value("age", 40, false);
 
-    final Insert insertSecond = QueryBuilder.insert("employee")
-        .value("fullname", "Fred Blinge")
-        .value("age", 40, false);
+      final Insert insert3 = QueryBuilder.insert(Key.builder("employee", parent).build())
+              .value("fullname", "Harry Ramsdens")
+              .value("age", 50, false);
 
-    try {
-      datastore.execute(insertSecond, txn);
-      fail("Expected DatastoreException exception.");
-    } catch (final DatastoreException e) {
-      assertEquals(400, e.getStatusCode().intValue()); // bad request
-    }
+      final Batch batch = QueryBuilder.batch()
+              .add(insert1)
+              .add(insert2)
+              .add(insert3);
+
+      return datastore.executeAsync(batch, txn).compose(batchInsert -> {
+        context.assertFalse(batchInsert.getInsertKeys().isEmpty());
+
+        final Query getAll = QueryBuilder.query()
+                .kindOf("employee")
+                .filterBy(QueryBuilder.ancestor(parent))
+                .orderBy(QueryBuilder.asc("fullname"));
+        return datastore.executeAsync(getAll);
+      });
+    }).setHandler(context.asyncAssertSuccess(getAllResult -> {
+      final List<Entity> entities = getAllResult.getAll();
+      context.assertEquals(3, entities.size());
+      context.assertEquals("Fred Blinge", entities.get(0).getString("fullname"));
+      context.assertEquals("Harry Ramsdens", entities.get(1).getString("fullname"));
+      context.assertEquals("Jack Spratt", entities.get(2).getString("fullname"));
+    }));
   }
 
   @Test
-  public void testTransactionWriteConflict() throws Exception {
-    final Insert insert = QueryBuilder.insert("employee", 1234567L)
-        .value("fullname", "Fred Blinge")
-        .value("age", 40, false);
-    datastore.execute(insert);
-
-    final TransactionResult txn = datastore.transaction();
-    final KeyQuery get = QueryBuilder.query("employee", 1234567L);
-    final QueryResult getResult = datastore.execute(get, txn);
-    assertNotNull(getResult.getEntity());
-
-    final Update update = QueryBuilder.update("employee", 1234567L)
-        .value("age", 41, false);
-    datastore.execute(update); // update outside transaction
-
-    try {
-      datastore.execute(update, txn); // update inside transaction
-      fail("Expected DatastoreException exception.");
-    } catch (final DatastoreException e) {
-      assertEquals(409, e.getStatusCode().intValue()); // conflict
-    }
-  }
-
-  @Test
-  public void testTransactionRead() throws Exception {
-    final Insert insert = QueryBuilder.insert("employee", 1234567L)
-        .value("fullname", "Fred Blinge")
-        .value("age", 40, false);
-    datastore.execute(insert);
-
-    final TransactionResult txn = datastore.transaction();
-    final KeyQuery get = QueryBuilder.query("employee", 1234567L);
-    final QueryResult getResult1 = datastore.execute(get, txn);
-    assertEquals(40, getResult1.getEntity().getInteger("age").intValue());
-
-    final Update update = QueryBuilder.update("employee", 1234567L)
-        .value("age", 41, false);
-    datastore.execute(update); // update outside transaction
-
-    final QueryResult getResult2 = datastore.execute(get, txn); // read inside transaction
-    assertEquals(40, getResult2.getEntity().getInteger("age").intValue());
-  }
-
-  @Test
-  public void testInsertBatchInTransaction() throws Exception {
-    final TransactionResult txn = datastore.transaction();
+  public void testQueryInTransaction(TestContext context) throws Exception {
     final Key parent = Key.builder("parent", "root").build();
 
     final Insert insert1 = QueryBuilder.insert(Key.builder("employee", parent).build())
@@ -185,57 +196,23 @@ public class TransactionTest extends DatastoreTest {
         .add(insert2)
         .add(insert3);
 
-    final MutationResult result = datastore.execute(batch, txn);
-    assertFalse(result.getInsertKeys().isEmpty());
+    datastore.executeAsync(batch).compose(batchResult -> {
+      context.assertFalse(batchResult.getInsertKeys().isEmpty());
+      return datastore.transactionAsync();
+    }).compose(txn -> {
+      final Query getAll = QueryBuilder.query()
+              .kindOf("employee")
+              .filterBy(QueryBuilder.ancestor(parent))
+              .orderBy(QueryBuilder.asc("fullname"));
+      return datastore.executeAsync(getAll, txn).compose(getAllResult -> {
+        final List<Entity> entities = getAllResult.getAll();
+        context.assertEquals(3, entities.size());
+        context.assertEquals("Fred Blinge", entities.get(0).getString("fullname"));
+        context.assertEquals("Harry Ramsdens", entities.get(1).getString("fullname"));
+        context.assertEquals("Jack Spratt", entities.get(2).getString("fullname"));
 
-    final Query getAll = QueryBuilder.query()
-        .kindOf("employee")
-        .filterBy(QueryBuilder.ancestor(parent))
-        .orderBy(QueryBuilder.asc("fullname"));
-    final List<Entity> entities = datastore.execute(getAll).getAll();
-
-    assertEquals(3, entities.size());
-    assertEquals("Fred Blinge", entities.get(0).getString("fullname"));
-    assertEquals("Harry Ramsdens", entities.get(1).getString("fullname"));
-    assertEquals("Jack Spratt", entities.get(2).getString("fullname"));
-  }
-
-  @Test
-  public void testQueryInTransaction() throws Exception {
-    final Key parent = Key.builder("parent", "root").build();
-
-    final Insert insert1 = QueryBuilder.insert(Key.builder("employee", parent).build())
-        .value("fullname", "Jack Spratt")
-        .value("age", 21, false);
-
-    final Insert insert2 = QueryBuilder.insert(Key.builder("employee", parent).build())
-        .value("fullname", "Fred Blinge")
-        .value("age", 40, false);
-
-    final Insert insert3 = QueryBuilder.insert(Key.builder("employee", parent).build())
-        .value("fullname", "Harry Ramsdens")
-        .value("age", 50, false);
-
-    final Batch batch = QueryBuilder.batch()
-        .add(insert1)
-        .add(insert2)
-        .add(insert3);
-
-    final MutationResult result = datastore.execute(batch);
-    assertFalse(result.getInsertKeys().isEmpty());
-
-    final TransactionResult txn = datastore.transaction();
-    final Query getAll = QueryBuilder.query()
-        .kindOf("employee")
-        .filterBy(QueryBuilder.ancestor(parent))
-        .orderBy(QueryBuilder.asc("fullname"));
-    final List<Entity> entities = datastore.execute(getAll, txn).getAll();
-
-    assertEquals(3, entities.size());
-    assertEquals("Fred Blinge", entities.get(0).getString("fullname"));
-    assertEquals("Harry Ramsdens", entities.get(1).getString("fullname"));
-    assertEquals("Jack Spratt", entities.get(2).getString("fullname"));
-
-    datastore.commit(txn);
+        return datastore.commitAsync(txn);
+      });
+    }).setHandler(context.asyncAssertSuccess());
   }
 }

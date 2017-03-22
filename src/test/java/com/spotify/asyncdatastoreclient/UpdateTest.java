@@ -16,132 +16,149 @@
 
 package com.spotify.asyncdatastoreclient;
 
+import io.vertx.core.Future;
+import io.vertx.ext.unit.TestContext;
+import io.vertx.ext.unit.junit.VertxUnitRunner;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.junit.runner.RunWith;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.fail;
+import static org.junit.Assert.*;
 
+@RunWith(VertxUnitRunner.class)
 @Category(IntegrationTest.class)
 public class UpdateTest extends DatastoreTest {
 
   @Test
-  public void testUpdateExisting() throws Exception {
+  public void testUpdateExisting(TestContext context) throws Exception {
     final Insert insert = QueryBuilder.insert("employee")
         .value("fullname", "Fred Blinge")
         .value("age", 40, false);
 
-    final MutationResult existingResult = datastore.execute(insert);
-
-    final Update update = QueryBuilder.update(existingResult.getInsertKey())
-        .value("age", 41);
-    final MutationResult updateResult = datastore.execute(update);
-    assertTrue(updateResult.getIndexUpdates() > 0);
-
-    final KeyQuery get = QueryBuilder.query(existingResult.getInsertKey());
-    final QueryResult getResult = datastore.execute(get);
-
-    assertEquals(41, getResult.getEntity().getInteger("age").intValue());
+    datastore.executeAsync(insert).compose(existingResult -> {
+      final Update update = QueryBuilder.update(existingResult.getInsertKey())
+              .value("age", 41);
+      return datastore.executeAsync(update).compose(updateResult -> {
+        context.assertTrue(updateResult.getIndexUpdates() > 0);
+        return Future.succeededFuture(existingResult);
+      });
+    }).compose(existingResult -> {
+      final KeyQuery get = QueryBuilder.query(existingResult.getInsertKey());
+      return datastore.executeAsync(get);
+    }).setHandler(context.asyncAssertSuccess(getResult -> {
+      context.assertEquals(41, getResult.getEntity().getInteger("age"));
+    }));
   }
 
   @Test
-  public void testUpdateNotExisting() throws Exception {
+  public void testUpdateNotExisting(TestContext context) throws Exception {
     final Update update = QueryBuilder.update("employee", 1234567L)
         .value("age", 41);
 
-    try {
-      datastore.execute(update);
-      fail("Expected DatastoreException exception.");
-    } catch (final DatastoreException e) {
-      assertEquals(400, e.getStatusCode().intValue()); // bad request
-    }
+    datastore.executeAsync(update).setHandler(context.asyncAssertFailure(cause -> {
+      if(cause instanceof DatastoreException) {
+        context.assertEquals(400, ((DatastoreException)cause).getStatusCode());
+      } else {
+        context.fail(cause);
+      }
+    }));
   }
 
   @Test
-  public void testUpdateNotExistingWithUpsert() throws Exception {
+  public void testUpdateNotExistingWithUpsert(TestContext context) throws Exception {
     final Update update = QueryBuilder.update("employee", 1234567L)
         .value("age", 41)
         .upsert();
 
-    final MutationResult updateResult = datastore.execute(update);
-    assertTrue(updateResult.getIndexUpdates() > 0);
+    datastore.executeAsync(update).compose(updateResult -> {
+      context.assertTrue(updateResult.getIndexUpdates() > 0);
 
-    final KeyQuery get = QueryBuilder.query("employee", 1234567L);
-    final QueryResult getResult = datastore.execute(get);
-
-    assertEquals(41, getResult.getEntity().getInteger("age").intValue());
+      final KeyQuery get = QueryBuilder.query("employee", 1234567L);
+      return datastore.executeAsync(get);
+    }).setHandler(context.asyncAssertSuccess(getResult -> {
+      context.assertEquals(41, getResult.getEntity().getInteger("age"));
+    }));
   }
 
   @Test
-  public void testUpdateEntity() throws Exception {
+  public void testUpdateEntity(TestContext context) throws Exception {
     final Entity existing = Entity.builder("employee")
         .property("fullname", "Fred Blinge")
         .property("age", 40, false)
         .build();
-    final MutationResult result = datastore.execute(QueryBuilder.insert(existing));
-    final Key existingKey = result.getInsertKey();
 
-    final Entity entity = Entity.builder(existing)
-        .key(existingKey)
-        .property("age", 41)
-        .build();
+    datastore.executeAsync(QueryBuilder.insert(existing)).compose(insertResult -> {
+      final Key existingKey = insertResult.getInsertKey();
 
-    final Update update = QueryBuilder.update(entity);
-    final MutationResult updateResult = datastore.execute(update);
-    assertTrue(updateResult.getIndexUpdates() > 0);
+      final Entity entity = Entity.builder(existing)
+              .key(existingKey)
+              .property("age", 41)
+              .build();
+      final Update update = QueryBuilder.update(entity);
 
-    final KeyQuery get = QueryBuilder.query(entity.getKey());
-    final QueryResult getResult = datastore.execute(get);
+      return datastore.executeAsync(update).compose(updateResult -> {
+        context.assertTrue(updateResult.getIndexUpdates() > 0);
 
-    assertEquals(41, getResult.getEntity().getInteger("age").intValue());
+        final KeyQuery get = QueryBuilder.query(entity.getKey());
+        return datastore.executeAsync(get);
+      });
+    }).setHandler(context.asyncAssertSuccess(getResult -> {
+      context.assertEquals(41, getResult.getEntity().getInteger("age"));
+    }));
   }
 
   @Test
-  public void testUpdateAddProperty() throws Exception {
+  public void testUpdateAddProperty(TestContext context) throws Exception {
     final Entity existing = Entity.builder("employee")
         .property("fullname", "Fred Blinge")
         .build();
-    final MutationResult result = datastore.execute(QueryBuilder.insert(existing));
-    final Key existingKey = result.getInsertKey();
 
-    final Entity entity = Entity.builder(existing)
-        .key(existingKey)
-        .property("age", 40)
-        .build();
+    datastore.executeAsync(QueryBuilder.insert(existing)).compose(insertResult -> {
+      final Key existingKey = insertResult.getInsertKey();
+      final Entity entity = Entity.builder(existing)
+              .key(existingKey)
+              .property("age", 40)
+              .build();
+      final Update update = QueryBuilder.update(entity);
+      return datastore.executeAsync(update).compose(updateResult -> {
+        context.assertTrue(updateResult.getIndexUpdates() > 0);
 
-    final Update update = QueryBuilder.update(entity);
-    final MutationResult updateResult = datastore.execute(update);
-    assertTrue(updateResult.getIndexUpdates() > 0);
-
-    final KeyQuery get = QueryBuilder.query(entity.getKey());
-    final QueryResult getResult = datastore.execute(get);
-
-    assertEquals(40, getResult.getEntity().getInteger("age").intValue());
+        final KeyQuery get = QueryBuilder.query(entity.getKey());
+        return datastore.executeAsync(get);
+      });
+    }).compose(getResult -> {
+      context.assertEquals(40, getResult.getEntity().getInteger("age"));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testUpdateRemoveProperty() throws Exception {
+  public void testUpdateRemoveProperty(TestContext context) throws Exception {
     final Entity existing = Entity.builder("employee")
         .property("fullname", "Fred Blinge")
         .property("age", 40)
         .build();
-    final MutationResult result = datastore.execute(QueryBuilder.insert(existing));
-    final Key existingKey = result.getInsertKey();
 
-    final Entity entity = Entity.builder(existing)
-        .key(existingKey)
-        .remove("age")
-        .build();
+    datastore.executeAsync(QueryBuilder.insert(existing))
+    .compose(insertResult -> {
+      final Key existingKey = insertResult.getInsertKey();
 
-    final Update update = QueryBuilder.update(entity);
-    final MutationResult updateResult = datastore.execute(update);
-    assertTrue(updateResult.getIndexUpdates() > 0);
+      final Entity entity = Entity.builder(existing)
+          .key(existingKey)
+          .remove("age")
+          .build();
 
-    final KeyQuery get = QueryBuilder.query(entity.getKey());
-    final QueryResult getResult = datastore.execute(get);
-
-    assertNull(getResult.getEntity().getInteger("age"));
+      final Update update = QueryBuilder.update(entity);
+      return datastore.executeAsync(update).compose(updateResult -> {
+        context.assertTrue(updateResult.getIndexUpdates() > 0);
+        return Future.succeededFuture(entity);
+      });
+    }).compose(entity -> {
+      final KeyQuery get = QueryBuilder.query(entity.getKey());
+      return datastore.executeAsync(get);
+    }).compose(getResult -> {
+      assertNull(getResult.getEntity().getInteger("age"));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 }

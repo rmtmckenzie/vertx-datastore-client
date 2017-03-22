@@ -19,16 +19,12 @@ package com.spotify.asyncdatastoreclient;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.protobuf.ByteString;
-
 import org.junit.Test;
 
 import java.util.Date;
 import java.util.Optional;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
+import static org.junit.Assert.*;
 
 public class EntityTest {
 

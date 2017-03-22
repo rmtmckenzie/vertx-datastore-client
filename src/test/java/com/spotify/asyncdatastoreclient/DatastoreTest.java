@@ -17,13 +17,23 @@
 package com.spotify.asyncdatastoreclient;
 
 import com.google.api.client.googleapis.auth.oauth2.GoogleCredential;
+import io.vertx.core.CompositeFuture;
+import io.vertx.core.Future;
+import io.vertx.core.Vertx;
+import io.vertx.ext.unit.TestContext;
+import io.vertx.ext.unit.junit.VertxUnitRunner;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.runner.RunWith;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
+@RunWith(VertxUnitRunner.class)
 public abstract class DatastoreTest {
 
   public static final String DATASTORE_HOST = System.getProperty("host", "http://localhost:8080");
@@ -35,9 +45,10 @@ public abstract class DatastoreTest {
   protected static Datastore datastore;
 
   @Before
-  public void before() throws Exception {
-    datastore = Datastore.create(datastoreConfig());
-    resetDatastore();
+  public void before(TestContext context) throws Exception {
+    Vertx vertx = Vertx.vertx();
+    datastore = Datastore.create(vertx, datastoreConfig());
+    context.asyncAssertSuccess(resetDatastore());
   }
 
   private DatastoreConfig datastoreConfig() {
@@ -67,17 +78,21 @@ public abstract class DatastoreTest {
     return config.build();
   }
 
-  private void resetDatastore() throws Exception {
+  private Future<CompositeFuture> resetDatastore() throws Exception {
     // add other kinds here as necessary...
-    removeAll("employee");
-    removeAll("payments");
+    final Future<CompositeFuture> removeEmployees = removeAll("employee");
+    final Future<CompositeFuture> removePayments = removeAll("payments");
+
+    return CompositeFuture.all(removeEmployees, removePayments);
   }
 
-  private void removeAll(final String kind) throws Exception {
+  private Future<CompositeFuture> removeAll(final String kind) throws Exception {
     final Query queryAll = QueryBuilder.query().kindOf(kind).keysOnly();
-    for (final Entity entity : datastore.execute(queryAll)) {
-      datastore.execute(QueryBuilder.delete(entity.getKey()));
-    }
+    return datastore.executeAsync(queryAll).compose(result -> {
+      final List<Future> collect = StreamSupport.stream(result.spliterator(), false).map(entity -> datastore.executeAsync(QueryBuilder.delete(entity.getKey()))).collect(Collectors.toList());
+
+      return CompositeFuture.all(collect);
+    });
   }
 
   @After
