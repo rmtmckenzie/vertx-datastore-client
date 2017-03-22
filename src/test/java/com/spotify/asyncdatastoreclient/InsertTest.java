@@ -18,6 +18,7 @@ package com.spotify.asyncdatastoreclient;
 
 import com.google.common.collect.ImmutableList;
 import com.google.protobuf.ByteString;
+import io.vertx.core.Future;
 import io.vertx.ext.unit.TestContext;
 import io.vertx.ext.unit.junit.VertxUnitRunner;
 import org.junit.Test;
@@ -36,33 +37,35 @@ import static org.junit.Assert.assertFalse;
 public class InsertTest extends DatastoreTest {
 
   @Test
-  public void testInsert(TestContext context) throws Exception {
+  public void testInsert(TestContext context) {
     final Insert insert = QueryBuilder.insert("employee", 1234567L)
         .value("fullname", "Fred Blinge")
         .value("age", 40, false);
 
-    datastore.executeAsync(insert).setHandler(context.asyncAssertSuccess(insertResult -> {
+    datastore.executeAsync(insert).compose(insertResult -> {
       context.assertTrue(insertResult.getIndexUpdates() > 0);
       context.assertEquals("employee", insertResult.getInsertKey().getKind());
       context.assertTrue(insertResult.getInsertKey().getId() > 0);
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testInsertAuto(TestContext context) throws Exception {
+  public void testInsertAuto(TestContext context) {
     final Insert insert = QueryBuilder.insert("employee")
         .value("fullname", "Fred Blinge")
         .value("age", 40, false);
 
-    datastore.executeAsync(insert).setHandler(context.asyncAssertSuccess(insertResult -> {
+    datastore.executeAsync(insert).compose(insertResult -> {
       context.assertTrue(insertResult.getIndexUpdates() > 0);
       context.assertEquals("employee", insertResult.getInsertKey().getKind());
       context.assertTrue(insertResult.getInsertKey().getId() > 0);
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testInsertEntity(TestContext context) throws Exception {
+  public void testInsertEntity(TestContext context) {
     final Date now = new Date();
     final ByteString picture = ByteString.copyFrom(new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9});
     final Entity address = Entity.builder("address", 222222L)
@@ -88,13 +91,14 @@ public class InsertTest extends DatastoreTest {
         .build();
 
     final Insert insert = QueryBuilder.insert(entity);
-    datastore.executeAsync(insert).setHandler(context.asyncAssertSuccess(insertResult -> {
+    datastore.executeAsync(insert).compose(insertResult -> {
       context.assertFalse(insertResult.getInsertKeys().isEmpty());
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testInsertAlreadyExists(TestContext context) throws Exception {
+  public void testInsertAlreadyExists(TestContext context) {
     final Insert insertFirst = QueryBuilder.insert("employee", 1234567L)
         .value("fullname", "Fred Blinge")
         .value("age", 40, false);
@@ -111,7 +115,7 @@ public class InsertTest extends DatastoreTest {
   }
 
   @Test
-  public void testInsertBlob(TestContext context) throws Exception {
+  public void testInsertBlob(TestContext context) {
     final byte[] randomBytes = new byte[2000];
     new Random().nextBytes(randomBytes);
     final ByteString large = ByteString.copyFrom(randomBytes);
@@ -121,27 +125,29 @@ public class InsertTest extends DatastoreTest {
         .value("picture1", small)
         .value("picture2", large, false);
 
-    datastore.executeAsync(insert).setHandler(context.asyncAssertSuccess(result -> {
+    datastore.executeAsync(insert).compose(result -> {
       context.assertFalse(result.getInsertKeys().isEmpty());
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testInsertAutoThenGet(TestContext context) throws Exception {
+  public void testInsertAutoThenGet(TestContext context) {
     final Insert insert = QueryBuilder.insert("employee")
         .value("fullname", "Fred Blinge")
         .value("age", 40, false);
     datastore.executeAsync(insert).compose(insertResult -> {
       final KeyQuery get = QueryBuilder.query(insertResult.getInsertKey());
       return datastore.executeAsync(get);
-    }).setHandler(context.asyncAssertSuccess(getResult -> {
+    }).compose(getResult -> {
       context.assertEquals("Fred Blinge", getResult.getEntity().getString("fullname"));
       context.assertEquals(40, getResult.getEntity().getInteger("age"));
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testInsertFullThenGet(TestContext context) throws Exception {
+  public void testInsertFullThenGet(TestContext context) {
     final Key key = Key.builder("employee", 1234567L).build();
     final Insert insert = QueryBuilder.insert(key)
         .value("fullname", "Fred Blinge")
@@ -149,14 +155,15 @@ public class InsertTest extends DatastoreTest {
     datastore.executeAsync(insert).compose(insertResult -> {
       final KeyQuery get = QueryBuilder.query(key);
       return datastore.executeAsync(get);
-    }).setHandler(context.asyncAssertSuccess(getResult -> {
+    }).compose(getResult -> {
       context.assertEquals("employee", getResult.getEntity().getKey().getKind());
       context.assertEquals(1234567L, getResult.getEntity().getKey().getId());
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testInsertWithParent(TestContext context) throws Exception {
+  public void testInsertWithParent(TestContext context) {
     final Key employeeKey = Key.builder("employee", 1234567L).build();
     final Key salaryKey = Key.builder("payments", 222222L, employeeKey).build();
 
@@ -165,16 +172,17 @@ public class InsertTest extends DatastoreTest {
     datastore.executeAsync(insert).compose(insertResult -> {
       final KeyQuery get = QueryBuilder.query(salaryKey);
       return datastore.executeAsync(get);
-    }).setHandler(context.asyncAssertSuccess(getResult -> {
+    }).compose(getResult -> {
       context.assertEquals("employee", getResult.getEntity().getKey().getPath().get(0).getKind());
       context.assertEquals(1234567L, getResult.getEntity().getKey().getPath().get(0).getId());
       context.assertEquals("payments", getResult.getEntity().getKey().getPath().get(1).getKind());
       context.assertEquals(222222L, getResult.getEntity().getKey().getPath().get(1).getId());
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testInsertBatch(TestContext context) throws Exception {
+  public void testInsertBatch(TestContext context) {
     final Key parent = Key.builder("parent", "root").build();
 
     final Insert insert1 = QueryBuilder.insert(Key.builder("employee", parent).build())
@@ -202,12 +210,13 @@ public class InsertTest extends DatastoreTest {
               .filterBy(QueryBuilder.ancestor(parent))
               .orderBy(QueryBuilder.asc("fullname"));
       return datastore.executeAsync(getAll);
-    }).setHandler(context.asyncAssertSuccess(getAllResult -> {
+    }).compose(getAllResult -> {
       final List<Entity> entities = getAllResult.getAll();
       assertEquals(3, entities.size());
       assertEquals("Fred Blinge", entities.get(0).getString("fullname"));
       assertEquals("Harry Ramsdens", entities.get(1).getString("fullname"));
       assertEquals("Jack Spratt", entities.get(2).getString("fullname"));
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 }

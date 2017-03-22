@@ -16,6 +16,7 @@
 
 package com.spotify.asyncdatastoreclient;
 
+import io.vertx.core.Future;
 import io.vertx.ext.unit.TestContext;
 import io.vertx.ext.unit.junit.VertxUnitRunner;
 import org.junit.Test;
@@ -32,16 +33,18 @@ import static org.junit.Assert.assertTrue;
 public class AllocateIdsTest extends DatastoreTest {
 
   @Test
-  public void testAllocateIds(TestContext context) throws Exception {
+  public void testAllocateIds(TestContext context) {
     final AllocateIds allocate = QueryBuilder.allocate()
         .add("employee")
         .add(Key.builder("employee").build());
 
-    datastore.executeAsync(allocate).setHandler(context.asyncAssertSuccess(allocateResult -> {
+    datastore.executeAsync(allocate).compose(allocateResult -> {
       final List<Key> keys = allocateResult.getKeys();
       assertEquals(2, keys.size());
       assertTrue(keys.get(0).getId() > 0);
       assertTrue(keys.get(1).getId() > 0);
-    }));
+
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 }

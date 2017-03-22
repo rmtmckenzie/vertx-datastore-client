@@ -16,6 +16,7 @@
 
 package com.spotify.asyncdatastoreclient;
 
+import io.vertx.core.Future;
 import io.vertx.ext.unit.TestContext;
 import io.vertx.ext.unit.junit.VertxUnitRunner;
 import org.junit.Test;
@@ -27,7 +28,7 @@ import org.junit.runner.RunWith;
 public class DeleteTest extends DatastoreTest {
 
   @Test
-  public void testDeleteEntity(TestContext context) throws Exception {
+  public void testDeleteEntity(TestContext context) {
     final Insert insert = QueryBuilder.insert("employee", 1234567L)
         .value("fullname", "Fred Blinge")
         .value("age", 40, false);
@@ -35,29 +36,32 @@ public class DeleteTest extends DatastoreTest {
     datastore.executeAsync(insert).compose(insertSuccessful -> {
       final Delete delete = QueryBuilder.delete("employee", 1234567L);
       return datastore.executeAsync(delete);
-    }).setHandler(context.asyncAssertSuccess(deleteResult -> {
+    }).compose(deleteResult -> {
       context.assertTrue(deleteResult.getIndexUpdates() > 0);
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testDeleteNotExists(TestContext context) throws Exception {
+  public void testDeleteNotExists(TestContext context) {
     final Delete delete = QueryBuilder.delete("employee", 1234567L);
-    datastore.executeAsync(delete).setHandler(context.asyncAssertSuccess(deleteResult -> {
+    datastore.executeAsync(delete).compose(deleteResult -> {
       context.assertEquals(0, deleteResult.getIndexUpdates());
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testDeleteByKey(TestContext context) throws Exception {
+  public void testDeleteByKey(TestContext context) {
     final Insert insert = QueryBuilder.insert("employee", 1234567L)
         .value("fullname", "Fred Blinge")
         .value("age", 40, false);
     datastore.executeAsync(insert).compose(insertResult -> {
       final Delete delete = QueryBuilder.delete(Key.builder("employee", 1234567L).build());
       return datastore.executeAsync(delete);
-    }).setHandler(context.asyncAssertSuccess(deleteResult -> {
+    }).compose(deleteResult -> {
       context.assertTrue(deleteResult.getIndexUpdates() > 0);
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 }

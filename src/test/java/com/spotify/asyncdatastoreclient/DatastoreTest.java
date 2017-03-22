@@ -45,7 +45,7 @@ public abstract class DatastoreTest {
   protected static Datastore datastore;
 
   @Before
-  public void before(TestContext context) throws Exception {
+  public void before(TestContext context) {
     Vertx vertx = Vertx.vertx();
     datastore = Datastore.create(vertx, datastoreConfig());
     context.asyncAssertSuccess(resetDatastore());

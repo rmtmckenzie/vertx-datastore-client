@@ -30,7 +30,7 @@ import static org.junit.Assert.*;
 public class UpdateTest extends DatastoreTest {
 
   @Test
-  public void testUpdateExisting(TestContext context) throws Exception {
+  public void testUpdateExisting(TestContext context) {
     final Insert insert = QueryBuilder.insert("employee")
         .value("fullname", "Fred Blinge")
         .value("age", 40, false);
@@ -45,13 +45,14 @@ public class UpdateTest extends DatastoreTest {
     }).compose(existingResult -> {
       final KeyQuery get = QueryBuilder.query(existingResult.getInsertKey());
       return datastore.executeAsync(get);
-    }).setHandler(context.asyncAssertSuccess(getResult -> {
+    }).compose(getResult -> {
       context.assertEquals(41, getResult.getEntity().getInteger("age"));
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testUpdateNotExisting(TestContext context) throws Exception {
+  public void testUpdateNotExisting(TestContext context) {
     final Update update = QueryBuilder.update("employee", 1234567L)
         .value("age", 41);
 
@@ -65,7 +66,7 @@ public class UpdateTest extends DatastoreTest {
   }
 
   @Test
-  public void testUpdateNotExistingWithUpsert(TestContext context) throws Exception {
+  public void testUpdateNotExistingWithUpsert(TestContext context) {
     final Update update = QueryBuilder.update("employee", 1234567L)
         .value("age", 41)
         .upsert();
@@ -75,13 +76,14 @@ public class UpdateTest extends DatastoreTest {
 
       final KeyQuery get = QueryBuilder.query("employee", 1234567L);
       return datastore.executeAsync(get);
-    }).setHandler(context.asyncAssertSuccess(getResult -> {
+    }).compose(getResult -> {
       context.assertEquals(41, getResult.getEntity().getInteger("age"));
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testUpdateEntity(TestContext context) throws Exception {
+  public void testUpdateEntity(TestContext context) {
     final Entity existing = Entity.builder("employee")
         .property("fullname", "Fred Blinge")
         .property("age", 40, false)
@@ -102,13 +104,14 @@ public class UpdateTest extends DatastoreTest {
         final KeyQuery get = QueryBuilder.query(entity.getKey());
         return datastore.executeAsync(get);
       });
-    }).setHandler(context.asyncAssertSuccess(getResult -> {
+    }).compose(getResult -> {
       context.assertEquals(41, getResult.getEntity().getInteger("age"));
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testUpdateAddProperty(TestContext context) throws Exception {
+  public void testUpdateAddProperty(TestContext context) {
     final Entity existing = Entity.builder("employee")
         .property("fullname", "Fred Blinge")
         .build();
@@ -133,7 +136,7 @@ public class UpdateTest extends DatastoreTest {
   }
 
   @Test
-  public void testUpdateRemoveProperty(TestContext context) throws Exception {
+  public void testUpdateRemoveProperty(TestContext context) {
     final Entity existing = Entity.builder("employee")
         .property("fullname", "Fred Blinge")
         .property("age", 40)

@@ -16,6 +16,7 @@
 
 package com.spotify.asyncdatastoreclient;
 
+import io.vertx.core.Future;
 import io.vertx.ext.unit.TestContext;
 import io.vertx.ext.unit.junit.VertxUnitRunner;
 import org.junit.Test;
@@ -31,7 +32,7 @@ import static org.junit.Assert.assertEquals;
 public class TransactionTest extends DatastoreTest {
 
   @Test
-  public void testInsert(TestContext context) throws Exception {
+  public void testInsert(TestContext context) {
     datastore.transactionAsync().compose(txn -> {
       final Insert insert = QueryBuilder.insert("employee")
           .value("fullname", "Fred Blinge")
@@ -40,14 +41,15 @@ public class TransactionTest extends DatastoreTest {
     }).compose(insertResult -> {
       final KeyQuery get = QueryBuilder.query(insertResult.getInsertKey());
       return datastore.executeAsync(get);
-    }).setHandler(context.asyncAssertSuccess(getResult -> {
+    }).compose(getResult -> {
       context.assertEquals("Fred Blinge", getResult.getEntity().getString("fullname"));
       context.assertEquals(40, getResult.getEntity().getInteger("age"));
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testGetThenInsert(TestContext context) throws Exception {
+  public void testGetThenInsert(TestContext context) {
     datastore.transactionAsync().compose(txn -> {
       final KeyQuery get = QueryBuilder.query("employee", 1234567L);
       return datastore.executeAsync(get, txn).compose(getResult -> {
@@ -57,13 +59,14 @@ public class TransactionTest extends DatastoreTest {
                 .value("age", 40, false);
         return datastore.executeAsync(insert, txn);
       });
-    }).setHandler(context.asyncAssertSuccess(insertResult -> {
+    }).compose(insertResult -> {
       context.assertTrue(insertResult.getIndexUpdates() > 0);
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testTransactionExpired(TestContext context) throws Exception {
+  public void testTransactionExpired(TestContext context) {
     datastore.transactionAsync().compose(txn -> {
       final Insert insertFirst = QueryBuilder.insert("employee")
               .value("fullname", "Fred Blinge")
@@ -84,7 +87,7 @@ public class TransactionTest extends DatastoreTest {
   }
 
   @Test
-  public void testTransactionWriteConflict(TestContext context) throws Exception {
+  public void testTransactionWriteConflict(TestContext context) {
     final Insert insert = QueryBuilder.insert("employee", 1234567L)
         .value("fullname", "Fred Blinge")
         .value("age", 40, false);
@@ -113,7 +116,7 @@ public class TransactionTest extends DatastoreTest {
   }
 
   @Test
-  public void testTransactionRead(TestContext context) throws Exception {
+  public void testTransactionRead(TestContext context) {
     final Insert insert = QueryBuilder.insert("employee", 1234567L)
         .value("fullname", "Fred Blinge")
         .value("age", 40, false);
@@ -130,13 +133,14 @@ public class TransactionTest extends DatastoreTest {
       }).compose(afterUpdate -> {
         return datastore.executeAsync(get, txn); // read inside transaction
       });
-    }).setHandler(context.asyncAssertSuccess(getResult2 -> {
+    }).compose(getResult2 -> {
       context.assertEquals(40, getResult2.getEntity().getInteger("age"));
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testInsertBatchInTransaction(TestContext context) throws Exception {
+  public void testInsertBatchInTransaction(TestContext context) {
     datastore.transactionAsync().compose(txn -> {
       final Key parent = Key.builder("parent", "root").build();
 
@@ -166,17 +170,18 @@ public class TransactionTest extends DatastoreTest {
                 .orderBy(QueryBuilder.asc("fullname"));
         return datastore.executeAsync(getAll);
       });
-    }).setHandler(context.asyncAssertSuccess(getAllResult -> {
+    }).compose(getAllResult -> {
       final List<Entity> entities = getAllResult.getAll();
       context.assertEquals(3, entities.size());
       context.assertEquals("Fred Blinge", entities.get(0).getString("fullname"));
       context.assertEquals("Harry Ramsdens", entities.get(1).getString("fullname"));
       context.assertEquals("Jack Spratt", entities.get(2).getString("fullname"));
-    }));
+      return Future.succeededFuture();
+    }).setHandler(context.asyncAssertSuccess());
   }
 
   @Test
-  public void testQueryInTransaction(TestContext context) throws Exception {
+  public void testQueryInTransaction(TestContext context) {
     final Key parent = Key.builder("parent", "root").build();
 
     final Insert insert1 = QueryBuilder.insert(Key.builder("employee", parent).build())
