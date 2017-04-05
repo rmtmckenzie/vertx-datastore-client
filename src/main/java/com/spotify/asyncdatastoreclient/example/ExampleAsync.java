@@ -105,7 +105,7 @@ public final class ExampleAsync {
     final Future<MutationResult> delete = query.compose((QueryResult result) -> {
       for (final Entity entity : result) {
         System.out.println("Employee name: " + entity.getString("fullname"));
-        System.out.println("Employee age: " + entity.getInteger("age"));
+        System.out.println("Employee age: " + entity.getInteger("age").intValue());
       }
       return deleteData(datastore);
     });

@@ -46,7 +46,7 @@ public class UpdateTest extends DatastoreTest {
       final KeyQuery get = QueryBuilder.query(existingResult.getInsertKey());
       return datastore.executeAsync(get);
     }).compose(getResult -> {
-      context.assertEquals(41, getResult.getEntity().getInteger("age"));
+      context.assertEquals(41, getResult.getEntity().getInteger("age").intValue());
       return Future.succeededFuture();
     }).setHandler(context.asyncAssertSuccess());
   }
@@ -77,7 +77,7 @@ public class UpdateTest extends DatastoreTest {
       final KeyQuery get = QueryBuilder.query("employee", 1234567L);
       return datastore.executeAsync(get);
     }).compose(getResult -> {
-      context.assertEquals(41, getResult.getEntity().getInteger("age"));
+      context.assertEquals(41, getResult.getEntity().getInteger("age").intValue());
       return Future.succeededFuture();
     }).setHandler(context.asyncAssertSuccess());
   }
@@ -105,7 +105,7 @@ public class UpdateTest extends DatastoreTest {
         return datastore.executeAsync(get);
       });
     }).compose(getResult -> {
-      context.assertEquals(41, getResult.getEntity().getInteger("age"));
+      context.assertEquals(41, getResult.getEntity().getInteger("age").intValue());
       return Future.succeededFuture();
     }).setHandler(context.asyncAssertSuccess());
   }
@@ -130,7 +130,7 @@ public class UpdateTest extends DatastoreTest {
         return datastore.executeAsync(get);
       });
     }).compose(getResult -> {
-      context.assertEquals(40, getResult.getEntity().getInteger("age"));
+      context.assertEquals(40, getResult.getEntity().getInteger("age").intValue());
       return Future.succeededFuture();
     }).setHandler(context.asyncAssertSuccess());
   }

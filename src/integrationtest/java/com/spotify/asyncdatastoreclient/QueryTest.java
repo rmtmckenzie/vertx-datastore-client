@@ -104,7 +104,7 @@ public class QueryTest extends DatastoreTest {
       final List<Entity> entities = getResult.getAll();
       context.assertEquals(1, entities.size());
       context.assertEquals("Fred Blinge", entities.get(0).getString("fullname"));
-      context.assertEquals(40, entities.get(0).getInteger("age"));
+      context.assertEquals(40L, entities.get(0).getInteger("age"));
     }));
   }
 
@@ -130,9 +130,9 @@ public class QueryTest extends DatastoreTest {
               .sorted(Comparator.comparingLong(a -> a.getKey().getId()))
               .collect(Collectors.toList());
       context.assertEquals("Fred Blinge", sorted.get(0).getString("fullname"));
-      context.assertEquals(40, sorted.get(0).getInteger("age"));
+      context.assertEquals(40L, sorted.get(0).getInteger("age"));
       context.assertEquals("Jack Spratt", sorted.get(1).getString("fullname"));
-      context.assertEquals(21, sorted.get(1).getInteger("age"));
+      context.assertEquals(21L, sorted.get(1).getInteger("age"));
     }));
   }
 
@@ -180,8 +180,8 @@ public class QueryTest extends DatastoreTest {
     }).setHandler(context.asyncAssertSuccess(getResult -> {
       final List<Entity> entities = getResult.getAll();
       context.assertEquals(10, entities.size());
-      context.assertEquals(1, entities.get(0).getInteger("payroll"));
-      context.assertEquals(10, entities.get(9).getInteger("payroll"));
+      context.assertEquals(1L, entities.get(0).getInteger("payroll"));
+      context.assertEquals(10L, entities.get(9).getInteger("payroll"));
     }));
   }
 
@@ -195,8 +195,8 @@ public class QueryTest extends DatastoreTest {
     }).setHandler(context.asyncAssertSuccess(getResult -> {
       final List<Entity> entities = getResult.getAll();
       context.assertEquals(10, entities.size());
-      context.assertEquals(10, entities.get(0).getInteger("payroll"));
-      context.assertEquals(1, entities.get(9).getInteger("payroll"));
+      context.assertEquals(10L, entities.get(0).getInteger("payroll"));
+      context.assertEquals(1L, entities.get(9).getInteger("payroll"));
     }));
   }
 
@@ -237,10 +237,10 @@ public class QueryTest extends DatastoreTest {
     }).setHandler(context.asyncAssertSuccess(getResult -> {
       final List<Entity> entities = getResult.getAll();
       context.assertEquals(10, entities.size());
-      context.assertEquals(true, entities.get(0).getBoolean("senior"));
-      context.assertEquals(true, entities.get(9).getBoolean("senior"));
-      context.assertEquals(10, entities.get(0).getInteger("payroll"));
-      context.assertEquals(1, entities.get(9).getInteger("payroll"));
+      context.assertFalse(entities.get(0).getBoolean("senior"));
+      context.assertTrue(entities.get(9).getBoolean("senior"));
+      context.assertEquals(10L, entities.get(0).getInteger("payroll"));
+      context.assertEquals(1L, entities.get(9).getInteger("payroll"));
     }));
   }
 
@@ -253,8 +253,8 @@ public class QueryTest extends DatastoreTest {
     }).setHandler(context.asyncAssertSuccess(getResult -> {
       final List<Entity> entities = getResult.getAll();
       context.assertEquals(10, entities.size());
-      context.assertEquals(1, entities.get(0).getKey().getId());
-      context.assertEquals(10, entities.get(9).getKey().getId());
+      context.assertEquals(1L, entities.get(0).getKey().getId());
+      context.assertEquals(10L, entities.get(9).getKey().getId());
     }));
   }
 
@@ -336,7 +336,7 @@ public class QueryTest extends DatastoreTest {
     }).setHandler(context.asyncAssertSuccess(getResult -> {
       final List<Entity> entities = getResult.getAll();
       context.assertEquals(1, entities.size());
-      context.assertEquals(10, entities.get(0).getInteger("payroll"));
+      context.assertEquals(10L, entities.get(0).getInteger("payroll"));
     }));
   }
 
@@ -491,10 +491,10 @@ public class QueryTest extends DatastoreTest {
       context.assertEquals(2, entities.size());
 
       context.assertEquals("Fred Blinge", entities.get(0).getString("fullname"));
-      context.assertEquals(1000, entities.get(0).getInteger("payroll"));
+      context.assertEquals(1000L, entities.get(0).getInteger("payroll"));
       context.assertNull(entities.get(0).getInteger("age"));
       context.assertEquals("Jack Spratt", entities.get(1).getString("fullname"));
-      context.assertEquals(1001, entities.get(1).getInteger("payroll"));
+      context.assertEquals(1001L, entities.get(1).getInteger("payroll"));
       context.assertNull(entities.get(1).getInteger("age"));
     }));
   }

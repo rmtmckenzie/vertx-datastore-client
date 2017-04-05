@@ -44,8 +44,6 @@ public class InsertTest extends DatastoreTest {
 
     datastore.executeAsync(insert).compose(insertResult -> {
       context.assertTrue(insertResult.getIndexUpdates() > 0);
-      context.assertEquals("employee", insertResult.getInsertKey().getKind());
-      context.assertTrue(insertResult.getInsertKey().getId() > 0);
       return Future.succeededFuture();
     }).setHandler(context.asyncAssertSuccess());
   }
@@ -141,7 +139,7 @@ public class InsertTest extends DatastoreTest {
       return datastore.executeAsync(get);
     }).compose(getResult -> {
       context.assertEquals("Fred Blinge", getResult.getEntity().getString("fullname"));
-      context.assertEquals(40, getResult.getEntity().getInteger("age"));
+      context.assertEquals(40, getResult.getEntity().getInteger("age").intValue());
       return Future.succeededFuture();
     }).setHandler(context.asyncAssertSuccess());
   }

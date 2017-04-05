@@ -1,0 +1,117 @@
+apply plugin: 'java'
+apply plugin: 'maven'
+apply plugin: 'maven-publish'
+
+group = 'com.github.rmtmckenzie'
+version = '1.0.0-SNAPSHOT'
+
+description = """A google cloud datastore client built from spotify's async-datatstore-client."""
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+tasks.withType(JavaCompile) {
+	options.encoding = 'UTF-8'
+}
+
+configurations {
+    integrationTestCompile.extendsFrom testCompile
+    integrationTestRuntime.extendsFrom testRuntime
+}
+
+configurations.all {
+}
+
+repositories {
+     maven { url "https://oss.sonatype.org/content/repositories/snapshots" }
+     maven { url "http://repo.maven.apache.org/maven2" }
+}
+dependencies {
+    compile group: 'org.slf4j', name: 'slf4j-api', version:'1.7.25'
+    compile group: 'io.vertx', name: 'vertx-web', version:'3.4.1'
+    compile group: 'com.google.guava', name: 'guava', version:'18.0'
+    compile group: 'com.google.cloud.datastore', name: 'datastore-v1-protos', version:'1.0.1'
+    compile group: 'com.google.api-client', name: 'google-api-client', version:'1.21.0'
+    compile group: 'com.google.http-client', name: 'google-http-client-protobuf', version:'1.21.0'
+    testCompile group: 'ch.qos.logback', name: 'logback-classic', version:'1.2.2'
+    testCompile group: 'junit', name: 'junit', version:'4.12'
+    testCompile group: 'io.vertx', name: 'vertx-unit', version:'3.4.1'
+}
+
+/**
+ * Configure Integration tests
+ */
+sourceSets {
+    integrationTest {
+        java.srcDir file('src/integrationtest/java')
+        resources.srcDir file('src/integrationtest/resources')
+        compileClasspath += main.output + test.output
+        runtimeClasspath += main.output + test.output
+    }
+}
+
+task integrationTest(type: Test) {
+    testClassesDir = sourceSets.integrationTest.output.classesDir
+    classpath = sourceSets.integrationTest.runtimeClasspath
+
+    testLogging {
+        events "passed", "skipped", "failed"
+    }
+}
+check.dependsOn integrationTest
+
+tasks.withType(Test) {
+    // Make reporting separate for integration and normal tests
+    reports.html.destination = file("${reporting.baseDir}/${name}")
+    // For tests, set blocked thread checking to much longer for debug purposes
+    jvmArgs(["-Dvertx.options.blockedThreadCheckInterval=" + 1000*60*30])
+}
+
+task sourceJar(type: Jar) {
+    from sourceSets.main.allJava
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+
+            artifact sourceJar {
+                classifier "sources"
+            }
+
+            pom.withXml {
+                def node = asNode()
+                def developers = node.appendNode('developers')
+                def developer1 = developers.appendNode("developer")
+                developer1.appendNode("id", "alan")
+                developer1.appendNode("email", "alan@spotify.com")
+                developer1.appendNode("name", "Alan Wright")
+
+                def developer2 = developers.appendNode("developer")
+                developer2.appendNode("id", "rmtmckenzie")
+                developer2.appendNode("email", "rmtmckenzie@gmail.com")
+                developer2.appendNode("name", "Morgan McKenzie")
+
+                def license = node.appendNode("licenses").appendNode("license")
+                license.appendNode("name", "The Apache Software License, Version 2.0")
+                license.appendNode("url", "http://www.apache.org/licenses/LICENSE-2.0.txt")
+                license.appendNode("distribution", "repo")
+                license.appendNode("comments", "A business-friendly OSS license")
+
+                def scm = node.appendNode("scm")
+                scm.appendNode("connection", "scm:git:https://github.com/rmtmckenzie/async-datastore-client.git")
+                scm.appendNode("developerConnection", "scm:git:git@github.com:rmtmckenzie/async-datastore-client.git")
+                scm.appendNode("url", "scm:https://github.com/rmtmckenzie/vertx-datastore-client/")
+                scm.appendNode("tag", "HEAD")
+            }
+        }
+    }
+}
+
+
+/**
+ * Task to add wrapper (can use to update)
+ */
+task wrapper(type: Wrapper) {
+    gradleVersion = '3.4'
+}

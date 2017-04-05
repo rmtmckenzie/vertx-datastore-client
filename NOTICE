@@ -10,5 +10,8 @@ licensed with Apache Licence 2.0.
 This project uses guava from Google, which is licensed with
 Apache Licence 2.0.
 
-This project uses async-http-client by Jeanfrancois Arcand and
-is licensed with with Apache Licence 2.0.
+This project has been modified to use Vert-x for http communication
+by Morgan McKenzie - github/rmtmckenzie
+
+This project uses Vert.x from the Eclipse Foudnation, which is
+licensed with Apache 2.0 or Eclipse Public License Version 1.0

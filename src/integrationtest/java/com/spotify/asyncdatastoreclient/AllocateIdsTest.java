@@ -34,11 +34,13 @@ public class AllocateIdsTest extends DatastoreTest {
 
   @Test
   public void testAllocateIds(TestContext context) {
+    System.out.println("Started allocate ids test");
     final AllocateIds allocate = QueryBuilder.allocate()
         .add("employee")
         .add(Key.builder("employee").build());
 
     datastore.executeAsync(allocate).compose(allocateResult -> {
+      System.out.println("Received allocation result");
       final List<Key> keys = allocateResult.getKeys();
       assertEquals(2, keys.size());
       assertTrue(keys.get(0).getId() > 0);

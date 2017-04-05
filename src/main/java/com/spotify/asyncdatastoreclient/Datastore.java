@@ -29,6 +29,7 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpClient;
 import io.vertx.core.http.HttpClientOptions;
 import io.vertx.core.http.HttpClientResponse;
+import io.vertx.core.http.impl.HttpUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,6 +37,8 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executors;
@@ -63,7 +66,6 @@ public final class Datastore implements Closeable {
   public static final String USER_AGENT = "Datastore-Java-Client/" + VERSION + " (gzip)";
 
   private final DatastoreConfig config;
-//  private final AsyncHttpClient client;
   private final HttpClient httpClient;
   private final String prefixUri;
 
@@ -71,19 +73,38 @@ public final class Datastore implements Closeable {
   private volatile String accessToken;
 
 
-  private Datastore(final Vertx vertx, final DatastoreConfig config) {
+  private Datastore(final Vertx vertx, final DatastoreConfig config) throws URISyntaxException {
     this.config = config;
+
+    URI uri = HttpUtils.resolveURIReference(config.getHost(), "");
+
+    int port = uri.getPort();
+    String protocol = uri.getScheme();
+    char chend = protocol.charAt(protocol.length() - 1);
+
+    if (chend == 'p' && port == -1) {
+      port = 80;
+    } else if (chend == 's' && port == -1) {
+        port = 443;
+    } else if (port == -1) {
+      throw new UnsupportedOperationException("Do not support protocols other than http and https at this time when no port defined");
+    }
+
     final HttpClientOptions httpClientOptions = new HttpClientOptions()
             .setConnectTimeout(config.getConnectTimeout())
-            .setIdleTimeout(config.getRequestTimeout())
+            .setIdleTimeout(config.getRequestTimeout()/1000)
             .setMaxPoolSize(config.getMaxConnections())
             .setHttp2MaxPoolSize(config.getMaxConnections())
-            .setTryUseCompression(true);
+            .setDefaultHost(uri.getHost())
+            .setDefaultPort(port)
+            .setTryUseCompression(true)
+            .setReceiveBufferSize(5000);
     //TODO: retry is missing, eg:
-//    final AsyncHttpClientConfig httpConfig = new AsyncHttpClientConfig.Builder()
-//        .setMaxRequestRetry(config.getRequestRetry())
+    //final AsyncHttpClientConfig httpConfig = new AsyncHttpClientConfig.Builder()
+    //    .setMaxRequestRetry(config.getRequestRetry())
+
     httpClient = vertx.createHttpClient(httpClientOptions);
-    prefixUri = String.format("%s/%s/projects/%s:", config.getHost(), config.getVersion(), config.getProject());
+    prefixUri = String.format("%s/projects/%s:", config.getVersion(), config.getProject());
 
     executor = Executors.newSingleThreadScheduledExecutor();
 
@@ -96,7 +117,7 @@ public final class Datastore implements Closeable {
     }
   }
 
-  public static Datastore create(final Vertx vertx, final DatastoreConfig config) {
+  public static Datastore create(final Vertx vertx, final DatastoreConfig config) throws URISyntaxException {
     return new Datastore(vertx, config);
   }
 
@@ -141,7 +162,6 @@ public final class Datastore implements Closeable {
           future.fail(e);
         }
       });
-      httpClientResponse.exceptionHandler(future::fail);
       return future;
     });
   }
@@ -157,7 +177,7 @@ public final class Datastore implements Closeable {
       payload.writeTo(new OutputStream() {
         @Override
         public void write(int b) throws IOException {
-          buffer.appendByte((byte)b);
+          buffer.appendByte((byte)(b & 0xff));
         }
       });
     } catch (IOException e) {
@@ -172,36 +192,13 @@ public final class Datastore implements Closeable {
             .putHeader("User-Agent", USER_AGENT)
             .putHeader("Accept-Encoding", "gzip")
             .handler(doPost::complete)
-            .exceptionHandler(doPost::fail)
+            .exceptionHandler(cause -> {
+              doPost.fail(cause);
+            })
             .end(buffer);
 
     return doPost;
   }
-
-//  private AsyncHttpClient.BoundRequestBuilder prepareRequest(final String method, final ProtoHttpContent payload) throws IOException {
-//
-//    HttpClientRequest post = httpClient.post(prefixUri + method);
-//    post.headers().add("Authorization", "Bearer " + accessToken)
-//            .add("Content-Type", "application/x-protobuf")
-//            .add("User-Agent", USER_AGENT)
-//            .add("Accept-Encoding", "gzip");
-//    post.write()
-//
-//    final AsyncHttpClient.BoundRequestBuilder builder = client.preparePost(prefixUri + method);
-//    builder.addHeader("Authorization", "Bearer " + accessToken);
-//    builder.addHeader("Content-Type", "application/x-protobuf");
-//    builder.addHeader("User-Agent", USER_AGENT);
-//    builder.addHeader("Accept-Encoding", "gzip");
-//    builder.setContentLength((int) payload.getLength());
-//    builder.setBody(payload.getMessage().toByteArray());
-//    return builder;
-//  }
-
-//  private InputStream streamResponse(final Response response) throws IOException {
-//    final InputStream input = response.getResponseBodyAsStream();
-//    final boolean compressed = "gzip".equals(response.getHeader("Content-Encoding"));
-//    return compressed ? new GZIPInputStream(input) : input;
-//  }
 
   private InputStream streamBufferResponse(final Buffer responseBody, MultiMap headers) throws IOException {
     final InputStream bufferStream = new InputStream() {
@@ -209,24 +206,12 @@ public final class Datastore implements Closeable {
       private int len = responseBody.length();
       @Override
       public int read() throws IOException {
-        return curPos < len ? responseBody.getByte(curPos) : -1;
+        return curPos < len ? ((int)(responseBody.getByte(curPos++)) & 0xff) : -1;
       }
     };
     final boolean compressed = "gzip".equals(headers.get("Content-Encoding"));
     return compressed ? new GZIPInputStream(bufferStream) : bufferStream;
   }
-
-//  /**
-//   * Start a new transaction.
-//   *
-//   * The returned {@code TransactionResult} contains the transaction if the
-//   * request is successful.
-//   *
-//   * @return the result of the transaction request.
-//   */
-//  public TransactionResult transaction() throws DatastoreException {
-//    return Futures.get(transactionAsync(), DatastoreException.class);
-//  }
 
   /**
    * Start a new transaction.

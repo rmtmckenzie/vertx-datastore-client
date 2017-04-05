@@ -43,7 +43,7 @@ public class TransactionTest extends DatastoreTest {
       return datastore.executeAsync(get);
     }).compose(getResult -> {
       context.assertEquals("Fred Blinge", getResult.getEntity().getString("fullname"));
-      context.assertEquals(40, getResult.getEntity().getInteger("age"));
+      context.assertEquals(40, getResult.getEntity().getInteger("age").intValue());
       return Future.succeededFuture();
     }).setHandler(context.asyncAssertSuccess());
   }
@@ -71,12 +71,12 @@ public class TransactionTest extends DatastoreTest {
       final Insert insertFirst = QueryBuilder.insert("employee")
               .value("fullname", "Fred Blinge")
               .value("age", 40, false);
-      return datastore.executeAsync(insertFirst).compose(firstInsertResult -> {
-        final Insert insertSecond = QueryBuilder.insert("employee")
-                .value("fullname", "Fred Blinge")
-                .value("age", 40, false);
-        return datastore.executeAsync(insertSecond, txn);
-      });
+      return datastore.executeAsync(insertFirst, txn).compose(firstInsertResult -> Future.succeededFuture(txn));
+    }).compose(txn -> {
+      final Insert insertSecond = QueryBuilder.insert("employee")
+              .value("fullname", "Fred Blinge")
+              .value("age", 40, false);
+      return datastore.executeAsync(insertSecond, txn);
     }).setHandler(context.asyncAssertFailure(cause -> {
       if(cause instanceof DatastoreException) {
         context.assertEquals(400, ((DatastoreException)cause).getStatusCode()); // bad request
@@ -91,24 +91,28 @@ public class TransactionTest extends DatastoreTest {
     final Insert insert = QueryBuilder.insert("employee", 1234567L)
         .value("fullname", "Fred Blinge")
         .value("age", 40, false);
+
     datastore.executeAsync(insert).compose(insertResult -> {
       return datastore.transactionAsync(); // initiate transition
     }).compose(txn -> {
       final KeyQuery get = QueryBuilder.query("employee", 1234567L);
-      return datastore.executeAsync(get).compose(getResult -> {
+      return datastore.executeAsync(get, txn).compose(getResult -> {
         context.assertNotNull(getResult.getEntity());
+
         final Update update = QueryBuilder.update("employee", 1234567L)
                 .value("age", 41, false);
+
         return datastore.executeAsync(update); // update outside transaction
       }).compose(updateResult -> {
+        //now, update within transaction
         final Update update = QueryBuilder.update("employee", 1234567L)
                 .value("age", 41, false);
-        return datastore.executeAsync(update, txn); // update within transaction
+        return datastore.executeAsync(update, txn);
       });
     }).setHandler(context.asyncAssertFailure(secondUpdateFailure -> {
       // ensure that update using transaction after updating outside transaction fails
       if(secondUpdateFailure instanceof DatastoreException) {
-        assertEquals(409, ((DatastoreException)secondUpdateFailure).getStatusCode().intValue()); // conflict
+        context.assertEquals(409, ((DatastoreException)secondUpdateFailure).getStatusCode()); // conflict
       } else {
         context.fail(secondUpdateFailure);
       }
@@ -125,7 +129,7 @@ public class TransactionTest extends DatastoreTest {
     }).compose(txn -> {
       final KeyQuery get = QueryBuilder.query("employee", 1234567L);
       return datastore.executeAsync(get, txn).compose(getResult1 -> {
-        context.assertEquals(40, getResult1.getEntity().getInteger("age"));
+        context.assertEquals(40, getResult1.getEntity().getInteger("age").intValue());
 
         final Update update = QueryBuilder.update("employee", 1234567L)
                 .value("age", 41, false);
@@ -134,7 +138,7 @@ public class TransactionTest extends DatastoreTest {
         return datastore.executeAsync(get, txn); // read inside transaction
       });
     }).compose(getResult2 -> {
-      context.assertEquals(40, getResult2.getEntity().getInteger("age"));
+      context.assertEquals(40, getResult2.getEntity().getInteger("age").intValue());
       return Future.succeededFuture();
     }).setHandler(context.asyncAssertSuccess());
   }
