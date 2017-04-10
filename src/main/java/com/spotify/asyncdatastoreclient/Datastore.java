@@ -30,6 +30,7 @@ import io.vertx.core.http.HttpClient;
 import io.vertx.core.http.HttpClientOptions;
 import io.vertx.core.http.HttpClientResponse;
 import io.vertx.core.http.impl.HttpUtils;
+import io.vertx.core.net.JksOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -90,6 +91,9 @@ public final class Datastore implements Closeable {
       throw new UnsupportedOperationException("Do not support protocols other than http and https at this time when no port defined");
     }
 
+    // set ssl to true if protocol is https
+    boolean ssl = port == 's';
+
     final HttpClientOptions httpClientOptions = new HttpClientOptions()
             .setConnectTimeout(config.getConnectTimeout())
             .setIdleTimeout(config.getRequestTimeout()/1000)
@@ -98,7 +102,10 @@ public final class Datastore implements Closeable {
             .setDefaultHost(uri.getHost())
             .setDefaultPort(port)
             .setTryUseCompression(true)
-            .setReceiveBufferSize(5000);
+            .setReceiveBufferSize(5000)
+            .setSsl(ssl)
+            .setTrustStoreOptions(new JksOptions()
+              .setPath(System.getProperty("java.home") + "/lib/security/cacerts"));
     //TODO: retry is missing, eg:
     //final AsyncHttpClientConfig httpConfig = new AsyncHttpClientConfig.Builder()
     //    .setMaxRequestRetry(config.getRequestRetry())
