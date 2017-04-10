@@ -92,7 +92,7 @@ public final class Datastore implements Closeable {
     }
 
     // set ssl to true if protocol is https
-    boolean ssl = port == 's';
+    boolean ssl = chend == 's';
 
     final HttpClientOptions httpClientOptions = new HttpClientOptions()
             .setConnectTimeout(config.getConnectTimeout())
@@ -118,6 +118,8 @@ public final class Datastore implements Closeable {
     if (config.getCredential() != null) {
       // block while retrieving an access token for the first time
       refreshAccessToken();
+      // store the first time as refresh doesn't
+      this.accessToken = config.getCredential().getAccessToken();
 
       // wake up every 10 seconds to check if access token has expired
       executor.scheduleAtFixedRate(this::refreshAccessToken, 10, 10, TimeUnit.SECONDS);
