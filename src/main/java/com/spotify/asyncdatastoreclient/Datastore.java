@@ -111,7 +111,7 @@ public final class Datastore implements Closeable {
     //    .setMaxRequestRetry(config.getRequestRetry())
 
     httpClient = vertx.createHttpClient(httpClientOptions);
-    prefixUri = String.format("%s/projects/%s:", config.getVersion(), config.getProject());
+    prefixUri = String.format("/%s/projects/%s:", config.getVersion(), config.getProject());
 
     executor = Executors.newSingleThreadScheduledExecutor();
 
