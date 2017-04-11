@@ -18,9 +18,22 @@ package com.spotify.asyncdatastoreclient;
 
 import com.google.api.client.auth.oauth2.Credential;
 import com.google.api.client.http.protobuf.ProtoHttpContent;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
-import com.google.datastore.v1.*;
+import com.google.datastore.v1.AllocateIdsRequest;
+import com.google.datastore.v1.AllocateIdsResponse;
+import com.google.datastore.v1.BeginTransactionRequest;
+import com.google.datastore.v1.BeginTransactionResponse;
+import com.google.datastore.v1.CommitRequest;
+import com.google.datastore.v1.CommitResponse;
+import com.google.datastore.v1.LookupRequest;
+import com.google.datastore.v1.LookupResponse;
+import com.google.datastore.v1.Mutation;
+import com.google.datastore.v1.PartitionId;
+import com.google.datastore.v1.ReadOptions;
+import com.google.datastore.v1.RollbackRequest;
+import com.google.datastore.v1.RollbackResponse;
+import com.google.datastore.v1.RunQueryRequest;
+import com.google.datastore.v1.RunQueryResponse;
 import com.google.protobuf.ByteString;
 import io.vertx.core.Future;
 import io.vertx.core.MultiMap;
@@ -42,9 +55,6 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.zip.GZIPInputStream;
@@ -69,13 +79,15 @@ public final class Datastore implements Closeable {
   private final DatastoreConfig config;
   private final HttpClient httpClient;
   private final String prefixUri;
+  private final Vertx vertx;
 
-  private final ScheduledExecutorService executor;
+  private final Long periodicTimerId;
   private volatile String accessToken;
 
 
-  private Datastore(final Vertx vertx, final DatastoreConfig config) throws URISyntaxException {
+  private Datastore(final Vertx vertx, final DatastoreConfig config) throws URISyntaxException, IOException {
     this.config = config;
+    this.vertx = vertx;
 
     URI uri = HttpUtils.resolveURIReference(config.getHost(), "");
 
@@ -106,6 +118,7 @@ public final class Datastore implements Closeable {
             .setSsl(ssl)
             .setTrustStoreOptions(new JksOptions()
               .setPath(System.getProperty("java.home") + "/lib/security/cacerts"));
+
     //TODO: retry is missing, eg:
     //final AsyncHttpClientConfig httpConfig = new AsyncHttpClientConfig.Builder()
     //    .setMaxRequestRetry(config.getRequestRetry())
@@ -113,44 +126,66 @@ public final class Datastore implements Closeable {
     httpClient = vertx.createHttpClient(httpClientOptions);
     prefixUri = String.format("/%s/projects/%s:", config.getVersion(), config.getProject());
 
-    executor = Executors.newSingleThreadScheduledExecutor();
-
     if (config.getCredential() != null) {
       // block while retrieving an access token for the first time
-      refreshAccessToken();
-      // store the first time as refresh doesn't
-      this.accessToken = config.getCredential().getAccessToken();
+      Credential credential = config.getCredential();
+      String accessToken = credential.getAccessToken();
 
-      // wake up every 10 seconds to check if access token has expired
-      executor.scheduleAtFixedRate(this::refreshAccessToken, 10, 10, TimeUnit.SECONDS);
+      if(accessToken == null) {
+        credential.refreshToken();
+        accessToken = credential.getAccessToken();
+      }
+
+      this.accessToken = accessToken;
+      this.periodicTimerId = vertx.setPeriodic(10000, (id) -> this.refreshAccessToken());
+
+    } else {
+      this.periodicTimerId = null;
     }
   }
 
-  public static Datastore create(final Vertx vertx, final DatastoreConfig config) throws URISyntaxException {
+  public static Datastore create(final Vertx vertx, final DatastoreConfig config) throws URISyntaxException, IOException {
     return new Datastore(vertx, config);
   }
 
   @Override
   public void close() {
-    executor.shutdown();
+    if(this.periodicTimerId != null) {
+      vertx.cancelTimer(this.periodicTimerId);
+    }
     httpClient.close();
   }
 
-  private void refreshAccessToken() {
+  private Future<String> refreshAccessToken() {
     final Credential credential = config.getCredential();
     final Long expiresIn = credential.getExpiresInSeconds();
 
-    // trigger refresh if token is about to expire
-    if (credential.getAccessToken() == null || expiresIn != null && expiresIn <= 60) {
-      try {
-        credential.refreshToken();
-        final String accessTokenLocal = credential.getAccessToken();
-        if (accessTokenLocal != null) {
-          this.accessToken = accessTokenLocal;
+    // don't need to check accessToken because it will always have
+    // been tried once before refresh is called.
+    if(expiresIn != null && expiresIn <= 60) {
+      // definitely need to refresh
+      Future<String> future = Future.future();
+
+      vertx.<String>executeBlocking((blocker) -> {
+        try {
+          credential.refreshToken();
+          blocker.complete(credential.getAccessToken());
+        } catch (IOException e) {
+          blocker.fail(e);
         }
-      } catch (final IOException e) {
-        log.error("Storage exception", Throwables.getRootCause(e));
-      }
+      }, res -> {
+        if(res.succeeded()) {
+          if(res.result() != null) {
+            this.accessToken = res.result();
+          }
+          future.complete(this.accessToken);
+        } else {
+          future.fail(res.cause());
+        }
+      });
+      return future;
+    } else {
+      return Future.succeededFuture(this.accessToken);
     }
   }
 
