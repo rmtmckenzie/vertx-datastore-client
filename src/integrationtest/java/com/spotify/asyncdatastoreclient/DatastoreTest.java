@@ -61,7 +61,7 @@ public abstract class DatastoreTest {
   public Timeout timeout = Timeout.seconds(100);
 
   @Before
-  public void before(TestContext context) throws URISyntaxException {
+  public void before(TestContext context) throws URISyntaxException, IOException {
     Vertx vertx = rule.vertx();
     vertx.exceptionHandler(context.exceptionHandler());
     datastore = Datastore.create(vertx, datastoreConfig());
