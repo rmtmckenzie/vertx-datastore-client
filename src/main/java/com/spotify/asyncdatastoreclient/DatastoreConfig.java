@@ -42,6 +42,7 @@ public final class DatastoreConfig {
   private static final Integer DEFAULT_REQUEST_RETRIES = 5;
   private static final String DEFAULT_HOST = "https://datastore.googleapis.com";
   private static final String DEFAULT_VERSION = "v1";
+  private static final Boolean DEFAULT_USEHTTP2 = false;
 
   private final int connectTimeout;
   private final int maxConnections;
@@ -52,6 +53,7 @@ public final class DatastoreConfig {
   private final String namespace;
   private final String host;
   private final String version;
+  private final boolean useHttp2;
 
   private DatastoreConfig(final Integer connectTimeout,
                           final Integer maxConnections,
@@ -61,7 +63,8 @@ public final class DatastoreConfig {
                           final String project,
                           final String namespace,
                           final String host,
-                          final String version) {
+                          final String version,
+                          final Boolean useHttp2) {
     this.connectTimeout = firstNonNull(connectTimeout, DEFAULT_CONNECT_TIMEOUT);
     this.maxConnections = firstNonNull(maxConnections, DEFAULT_MAX_CONNECTIONS);
     this.requestTimeout = firstNonNull(requestTimeout, DEFAULT_REQUEST_TIMEOUTS);
@@ -71,6 +74,7 @@ public final class DatastoreConfig {
     this.namespace = namespace;
     this.host = firstNonNull(host, DEFAULT_HOST);
     this.version = firstNonNull(version, DEFAULT_VERSION);
+    this.useHttp2 = firstNonNull(useHttp2, DEFAULT_USEHTTP2);
   }
 
   public static final class Builder {
@@ -83,6 +87,7 @@ public final class DatastoreConfig {
     private String namespace;
     private String host;
     private String version;
+    private Boolean useHttp2;
 
     private Builder() {}
 
@@ -100,7 +105,8 @@ public final class DatastoreConfig {
                                  project,
                                  namespace,
                                  host,
-                                 version);
+                                 version,
+                                 useHttp2);
     }
 
     /**
@@ -210,6 +216,17 @@ public final class DatastoreConfig {
       this.version = version;
       return this;
     }
+
+    /**
+     * The HTTP version to use.
+     *
+     * @param useHttp2 whether to use Http 2
+     * @return this config builder.
+     */
+    public Builder http2(final boolean useHttp2) {
+      this.useHttp2 = useHttp2;
+      return this;
+    }
   }
 
   public static DatastoreConfig.Builder builder() {
@@ -251,5 +268,7 @@ public final class DatastoreConfig {
   public String getVersion() {
     return version;
   }
+
+  public boolean getUseHttp2() { return useHttp2; }
 }
 

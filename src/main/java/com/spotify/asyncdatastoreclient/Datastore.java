@@ -42,6 +42,7 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpClient;
 import io.vertx.core.http.HttpClientOptions;
 import io.vertx.core.http.HttpClientResponse;
+import io.vertx.core.http.HttpVersion;
 import io.vertx.core.http.impl.HttpUtils;
 import io.vertx.core.net.JksOptions;
 import org.slf4j.Logger;
@@ -114,8 +115,10 @@ public final class Datastore implements Closeable {
             .setDefaultHost(uri.getHost())
             .setDefaultPort(port)
             .setTryUseCompression(true)
-            .setReceiveBufferSize(5000)
+            .setReceiveBufferSize(8192)
             .setSsl(ssl)
+            .setProtocolVersion(config.getUseHttp2() ? HttpVersion.HTTP_2 : HttpClientOptions.DEFAULT_PROTOCOL_VERSION)
+            .setUseAlpn(config.getUseHttp2() && ssl || HttpClientOptions.DEFAULT_USE_ALPN)
             .setTrustStoreOptions(new JksOptions()
               .setPath(System.getProperty("java.home") + "/lib/security/cacerts"));
 
