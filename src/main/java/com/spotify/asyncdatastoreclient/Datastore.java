@@ -184,7 +184,7 @@ public final class Datastore implements Closeable {
           }
           future.complete(this.accessToken);
         } else {
-          future.fail(res.cause());
+          future.fail(new DatastoreCountException(curNumRequests, res.cause()));
         }
       });
       return future;
@@ -202,12 +202,12 @@ public final class Datastore implements Closeable {
       Future<R> future = Future.future();
       httpClientResponse.bodyHandler(body -> {
         if(!isSuccessful(httpClientResponse.statusCode())) {
-          future.fail(new DatastoreException(httpClientResponse.statusCode(), body.toString()));
+          future.fail(new DatastoreCountException(curNumRequests, httpClientResponse.statusCode(), body.toString()));
         }
         try {
           future.complete(func.apply(streamBufferResponse(body, httpClientResponse.headers())));
         } catch (Exception e) {
-          future.fail(e);
+          future.fail(new DatastoreCountException(curNumRequests, e));
         }
       });
       return future;
