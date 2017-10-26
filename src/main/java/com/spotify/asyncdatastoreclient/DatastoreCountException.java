@@ -25,4 +25,9 @@ public class DatastoreCountException extends DatastoreException {
         this.count = count;
     }
 
+    @Override
+    public String getMessage() {
+        return "Failed when count was " + count + ". " + super.getMessage();
+    }
+
 }
