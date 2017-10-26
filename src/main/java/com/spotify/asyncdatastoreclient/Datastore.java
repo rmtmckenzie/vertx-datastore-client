@@ -84,6 +84,7 @@ public final class Datastore implements Closeable {
 
   private final Long periodicTimerId;
   private volatile String accessToken;
+  private int curNumRequests = 0;
 
 
   private Datastore(final Vertx vertx, final DatastoreConfig config) throws URISyntaxException, IOException {
@@ -233,13 +234,18 @@ public final class Datastore implements Closeable {
 
     Future<HttpClientResponse> doPost = Future.future();
 
+    curNumRequests += 1;
     httpClient.post(prefixUri + method)
             .putHeader("Authorization", "Bearer " + accessToken)
             .putHeader("Content-Type", "application/x-protobuf")
             .putHeader("User-Agent", USER_AGENT)
             .putHeader("Accept-Encoding", "gzip")
-            .handler(doPost::complete)
+            .handler(result -> {
+              curNumRequests -= 1;
+              doPost.complete(result);
+            })
             .exceptionHandler(cause -> {
+              curNumRequests -= 1;
               doPost.fail(cause);
             })
             .end(buffer);
@@ -258,6 +264,18 @@ public final class Datastore implements Closeable {
     };
     final boolean compressed = "gzip".equals(headers.get("Content-Encoding"));
     return compressed ? new GZIPInputStream(bufferStream) : bufferStream;
+  }
+
+  /**
+   * Get the number of current concurrent requests.
+   *
+   * Each time a request is sent, the underlying counter is incremented,
+   * and then when it completes it is decremented.
+   *
+   * @return the number of current requests
+   */
+  public int getCurNumRequests() {
+    return curNumRequests;
   }
 
   /**
