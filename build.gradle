@@ -50,7 +50,7 @@ sourceSets {
 }
 
 task integrationTest(type: Test) {
-    testClassesDir = sourceSets.integrationTest.output.classesDir
+    testClassesDirs = sourceSets.integrationTest.output.classesDirs
     classpath = sourceSets.integrationTest.runtimeClasspath
 
     testLogging {
@@ -113,5 +113,5 @@ publishing {
  * Task to add wrapper (can use to update)
  */
 task wrapper(type: Wrapper) {
-    gradleVersion = '3.4'
+    gradleVersion = '4.2.1'
 }

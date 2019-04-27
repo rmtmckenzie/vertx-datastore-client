@@ -52,6 +52,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.SocketException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.List;
@@ -184,7 +185,7 @@ public final class Datastore implements Closeable {
           }
           future.complete(this.accessToken);
         } else {
-          future.fail(new DatastoreCountException(curNumRequests, res.cause()));
+          future.fail(res.cause());
         }
       });
       return future;
@@ -235,21 +236,33 @@ public final class Datastore implements Closeable {
     Future<HttpClientResponse> doPost = Future.future();
 
     curNumRequests += 1;
-    httpClient.post(prefixUri + method)
-            .putHeader("Authorization", "Bearer " + accessToken)
-            .putHeader("Content-Type", "application/x-protobuf")
-            .putHeader("User-Agent", USER_AGENT)
-            .putHeader("Accept-Encoding", "gzip")
-            .handler(result -> {
-              curNumRequests -= 1;
-              doPost.complete(result);
-            })
-            .exceptionHandler(cause -> {
-              curNumRequests -= 1;
-              doPost.fail(cause);
-            })
-            .end(buffer);
+    try {
+      httpClient.post(prefixUri + method)
+              .putHeader("Authorization", "Bearer " + accessToken)
+              .putHeader("Content-Type", "application/x-protobuf")
+              .putHeader("User-Agent", USER_AGENT)
+              .putHeader("Accept-Encoding", "gzip")
+              .handler(result -> {
+                curNumRequests -= 1;
+                doPost.complete(result);
+              })
+              .exceptionHandler(cause -> {
+                curNumRequests -= 1;
+                if (cause instanceof SocketException) {
+                  if (cause.getMessage().contains("Network is unreachable: datastore.googleapis.com")) {
+                    log.warn("This is most likely a DNS issue - if you are on compute engine set " +
+                            "java.net.preferIPv4Stack=true, see https://github.com/netty/netty/pull/5659. " +
+                            " Caused by compute engine not supporting ipv6");
+                  }
+                }
 
+                doPost.fail(new DatastoreCountException(curNumRequests, cause));
+              })
+              .end(buffer);
+    } catch(Throwable t) {
+      curNumRequests -= 1;
+      doPost.fail(t);
+    }
     return doPost;
   }
 
