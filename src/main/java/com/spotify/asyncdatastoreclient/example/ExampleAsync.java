@@ -110,7 +110,7 @@ public final class ExampleAsync {
       return deleteData(datastore);
     });
 
-    delete.setHandler(operationsResult -> {
+    delete.onComplete(operationsResult -> {
       if(operationsResult.succeeded()) {
         System.out.println("All complete.");
       } else {

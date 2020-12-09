@@ -3,7 +3,7 @@ apply plugin: 'maven'
 apply plugin: 'maven-publish'
 
 group = 'com.github.rmtmckenzie'
-version = '1.0.4-SNAPSHOT'
+version = '1.1.0-SNAPSHOT'
 
 description = """A google cloud datastore client built from spotify's async-datatstore-client."""
 
@@ -23,11 +23,11 @@ configurations.all {
 
 repositories {
      maven { url "https://oss.sonatype.org/content/repositories/snapshots" }
-     maven { url "http://repo.maven.apache.org/maven2" }
+     maven { url "https://repo.maven.apache.org/maven2" }
 }
 dependencies {
     compile group: 'org.slf4j', name: 'slf4j-api', version:'1.7.25'
-    compile group: 'io.vertx', name: 'vertx-web', version:'3.4.1'
+    compile group: 'io.vertx', name: 'vertx-web', version:'4.0.0'
     compile group: 'com.google.guava', name: 'guava', version:'18.0'
     compile group: 'com.google.cloud.datastore', name: 'datastore-v1-protos', version:'1.0.1'
     compile group: 'com.google.api-client', name: 'google-api-client', version:'1.21.0'
@@ -106,12 +106,4 @@ publishing {
             }
         }
     }
-}
-
-
-/**
- * Task to add wrapper (can use to update)
- */
-task wrapper(type: Wrapper) {
-    gradleVersion = '4.2.1'
 }
